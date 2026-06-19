@@ -194,6 +194,9 @@ config AUX
 config UNIMP
     bool
 
+config TORQ
+    bool
+
 config LED
     bool
 

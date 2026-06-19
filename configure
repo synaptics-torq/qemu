@@ -650,6 +650,10 @@ for opt do
   ;;
   --extra-ldflags=*)
   ;;
+  --with-torq-ext-incdir=*) meson_option_add "-Dtorq_ext_incdir=$optarg"
+  ;;
+  --with-torq-ext-lib=*) meson_option_add "-Dtorq_ext_lib=$optarg"
+  ;;
   --cross-cc-*)
   ;;
   --cross-prefix-*)
@@ -868,6 +872,8 @@ Advanced options (experts only):
   --extra-cxxflags=CXXFLAGS append extra C++ compiler flags CXXFLAGS
   --extra-objcflags=OBJCFLAGS append extra Objective C compiler flags OBJCFLAGS
   --extra-ldflags=LDFLAGS  append extra linker flags LDFLAGS
+  --with-torq-ext-incdir=DIR path to external TORQ header files
+  --with-torq-ext-lib=LIB  external TORQ library (name or full path)
   --cross-cc-ARCH=CC       use compiler when building ARCH guest test cases
   --cross-cc-cflags-ARCH=  use compiler flags when building ARCH guest tests
   --cross-prefix-ARCH=PREFIX cross compiler prefix when building ARCH guest test cases

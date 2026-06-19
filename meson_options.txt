@@ -38,6 +38,10 @@ option('coroutine_backend', type: 'combo',
        value: 'auto', description: 'coroutine backend to use')
 option('gdb', type: 'string', value: '',
        description: 'Path to GDB')
+option('torq_ext_incdir', type: 'string', value: '',
+       description: 'Path to external TORQ header files')
+option('torq_ext_lib', type: 'string', value: '',
+       description: 'External TORQ library (library name or full path)')
 
 # Everything else can be set via --enable/--disable-* option
 # on the configure script command line.  After adding an option

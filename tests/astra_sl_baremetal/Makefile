@@ -2,7 +2,12 @@ CROSS ?= aarch64-linux-gnu-
 CC := $(CROSS)gcc
 OBJCOPY := $(CROSS)objcopy
 
-CFLAGS := -O2 -g -ffreestanding -fno-builtin -fno-stack-protector -Wall -Wextra
+# check CDESC_DIR is set
+ifndef CDESC_DIR
+$(error CDESC_DIR is not set. Please set it to the directory containing the Torq headers)
+endif
+
+CFLAGS := -O2 -g -ffreestanding -fno-builtin -fno-stack-protector -Wall -Wextra -I$(CDESC_DIR)
 LDFLAGS := -nostdlib -Wl,--build-id=none -T linker.ld
 
 all: hello.elf hello.bin

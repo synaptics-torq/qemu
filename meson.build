@@ -3749,6 +3749,18 @@ hw_common_arch = {}
 target_common_arch = {}
 target_common_system_arch = {}
 
+torq_ext_incdir = get_option('torq_ext_incdir')
+torq_ext_lib = get_option('torq_ext_lib')
+
+torq_dep = declare_dependency()
+
+if torq_ext_incdir != '' and  torq_ext_lib != ''
+  torq_dep = declare_dependency(
+    include_directories: include_directories(torq_ext_incdir),
+    link_args: [torq_ext_lib]
+  )
+endif
+
 # NOTE: the trace/ subdirectory needs the qapi_trace_events variable
 # that is filled in by qapi/.
 subdir('qapi')

@@ -43,6 +43,7 @@ config ASTRA_SL
     depends on TCG && ARM
     select ARM_GIC
     select PL011 # UART
+    select TORQ
 
 config CUBIEBOARD
     bool

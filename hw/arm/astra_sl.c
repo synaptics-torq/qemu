@@ -25,6 +25,7 @@
 #include "hw/arm/machines-qom.h"
 #include "hw/char/pl011.h"
 #include "hw/intc/arm_gic.h"
+#include "hw/misc/torq.h"
 #include "target/arm/cpu-qom.h"
 #include "system/address-spaces.h"
 
@@ -32,11 +33,14 @@
 #define ASTRA_SL_GIC_DIST_BASE   0x08000000
 #define ASTRA_SL_GIC_CPU_BASE    0x08010000
 #define ASTRA_SL_UART0_BASE      0x09000000
+#define ASTRA_SL_DEV_BASE        0x0a000000
+#define ASTRA_SL_DEV_SIZE        TORQ_MMIO_SIZE
 #define ASTRA_SL_RAM_BASE        0x40000000
 #define ASTRA_SL_RAM_SIZE        (2 * GiB)
 
-/* Interrupts: SPIs start at GIC offset 32 */
-#define ASTRA_SL_UART0_IRQ       32   /* SPI 0 */
+/* SPI input line indices (GIC interrupt ID = 32 + index) */
+#define ASTRA_SL_UART0_SPI       0    /* SPI ID 32 */
+#define ASTRA_SL_DEV_SPI         1    /* SPI ID 33 */
 
 #define ASTRA_SL_NUM_IRQS        64
 #define ASTRA_SL_NUM_CPUS        1
@@ -97,8 +101,11 @@ static void astra_sl_init(MachineState *machine)
     }
 
     /* PL011 UART */
-    pl011_create(ASTRA_SL_UART0_BASE, pic[ASTRA_SL_UART0_IRQ],
+    pl011_create(ASTRA_SL_UART0_BASE, pic[ASTRA_SL_UART0_SPI],
                  serial_hd(0));
+
+    /* TORQ device */
+    torq_create(ASTRA_SL_DEV_BASE, pic[ASTRA_SL_DEV_SPI]);
 
     /* Boot */
     astra_sl_binfo.ram_size = machine->ram_size;
