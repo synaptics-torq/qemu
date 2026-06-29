@@ -18,10 +18,13 @@
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/units.h"
+#include "system/device_tree.h"
 #include "hw/core/boards.h"
 #include "system/system.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/arm/boot.h"
+#include "hw/arm/bsa.h"
+#include "hw/arm/fdt.h"
 #include "hw/arm/machines-qom.h"
 #include "hw/char/pl011.h"
 #include "hw/intc/arm_gic.h"
@@ -49,6 +52,109 @@ static struct arm_boot_info astra_sl_binfo = {
     .loader_start = ASTRA_SL_RAM_BASE,
     .board_id     = -1, /* no board ID; rely on device tree */
 };
+
+static void *astra_sl_fdt;
+static int astra_sl_fdt_size;
+
+static void *astra_sl_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
+{
+    *fdt_size = astra_sl_fdt_size;
+    return astra_sl_fdt;
+}
+
+static void astra_sl_create_fdt(MachineState *machine)
+{
+    uint32_t clock_phandle;
+    uint32_t gic_phandle;
+    uint32_t timer_irqflags = deposit32(GIC_FDT_IRQ_FLAGS_LEVEL_HI,
+                                        GIC_FDT_IRQ_PPI_CPU_START,
+                                        GIC_FDT_IRQ_PPI_CPU_WIDTH, 1);
+    const char compat[] = "arm,pl011\0arm,primecell";
+    const char clocknames[] = "uartclk\0apb_pclk";
+    const char timer_compat[] = "arm,armv8-timer\0arm,armv7-timer";
+    const char *uart_node = "/pl011@9000000";
+
+    astra_sl_fdt = create_device_tree(&astra_sl_fdt_size);
+    if (!astra_sl_fdt) {
+        error_report("astra_sl: create_device_tree() failed");
+        exit(1);
+    }
+
+    qemu_fdt_setprop_string(astra_sl_fdt, "/", "compatible", "astra,astra-sl");
+    qemu_fdt_setprop_string(astra_sl_fdt, "/", "model", "astra-sl");
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/", "#address-cells", 0x2);
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/", "#size-cells", 0x2);
+
+    qemu_fdt_add_subnode(astra_sl_fdt, "/chosen");
+    qemu_fdt_add_subnode(astra_sl_fdt, "/aliases");
+
+    clock_phandle = qemu_fdt_alloc_phandle(astra_sl_fdt);
+    qemu_fdt_add_subnode(astra_sl_fdt, "/apb-pclk");
+    qemu_fdt_setprop_string(astra_sl_fdt, "/apb-pclk", "compatible",
+                            "fixed-clock");
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/apb-pclk", "#clock-cells", 0x0);
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/apb-pclk", "clock-frequency",
+                          24000000);
+    qemu_fdt_setprop_string(astra_sl_fdt, "/apb-pclk", "clock-output-names",
+                            "clk24mhz");
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/apb-pclk", "phandle",
+                          clock_phandle);
+
+    qemu_fdt_add_subnode(astra_sl_fdt, "/cpus");
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/cpus", "#address-cells", 0x2);
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/cpus", "#size-cells", 0x0);
+    qemu_fdt_add_subnode(astra_sl_fdt, "/cpus/cpu@0");
+    qemu_fdt_setprop_string(astra_sl_fdt, "/cpus/cpu@0", "device_type", "cpu");
+    qemu_fdt_setprop_string(astra_sl_fdt, "/cpus/cpu@0", "compatible",
+                            "arm,cortex-a53");
+    qemu_fdt_setprop_u64(astra_sl_fdt, "/cpus/cpu@0", "reg", 0);
+
+    gic_phandle = qemu_fdt_alloc_phandle(astra_sl_fdt);
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/", "interrupt-parent", gic_phandle);
+    qemu_fdt_add_subnode(astra_sl_fdt, "/intc@8000000");
+    qemu_fdt_setprop_string(astra_sl_fdt, "/intc@8000000", "compatible",
+                            "arm,cortex-a15-gic");
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/intc@8000000", "#interrupt-cells", 3);
+    qemu_fdt_setprop(astra_sl_fdt, "/intc@8000000", "interrupt-controller",
+                     NULL, 0);
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/intc@8000000", "#address-cells", 0x2);
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/intc@8000000", "#size-cells", 0x2);
+    qemu_fdt_setprop(astra_sl_fdt, "/intc@8000000", "ranges", NULL, 0);
+    qemu_fdt_setprop_sized_cells(astra_sl_fdt, "/intc@8000000", "reg",
+                                 2, ASTRA_SL_GIC_DIST_BASE, 2, 0x10000,
+                                 2, ASTRA_SL_GIC_CPU_BASE, 2, 0x10000);
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/intc@8000000", "phandle", gic_phandle);
+
+    qemu_fdt_add_subnode(astra_sl_fdt, "/timer");
+    qemu_fdt_setprop(astra_sl_fdt, "/timer", "compatible",
+                     timer_compat, sizeof(timer_compat));
+    qemu_fdt_setprop(astra_sl_fdt, "/timer", "always-on", NULL, 0);
+    qemu_fdt_setprop_cells(astra_sl_fdt, "/timer", "interrupts",
+                           GIC_FDT_IRQ_TYPE_PPI,
+                           INTID_TO_PPI(ARCH_TIMER_S_EL1_IRQ), timer_irqflags,
+                           GIC_FDT_IRQ_TYPE_PPI,
+                           INTID_TO_PPI(ARCH_TIMER_NS_EL1_IRQ), timer_irqflags,
+                           GIC_FDT_IRQ_TYPE_PPI,
+                           INTID_TO_PPI(ARCH_TIMER_VIRT_IRQ), timer_irqflags,
+                           GIC_FDT_IRQ_TYPE_PPI,
+                           INTID_TO_PPI(ARCH_TIMER_NS_EL2_IRQ), timer_irqflags);
+
+    qemu_fdt_add_subnode(astra_sl_fdt, uart_node);
+    qemu_fdt_setprop(astra_sl_fdt, uart_node, "compatible",
+                     compat, sizeof(compat));
+    qemu_fdt_setprop_sized_cells(astra_sl_fdt, uart_node, "reg",
+                                 2, ASTRA_SL_UART0_BASE, 2, 0x1000);
+    qemu_fdt_setprop_cells(astra_sl_fdt, uart_node, "interrupts",
+                           GIC_FDT_IRQ_TYPE_SPI,
+                           ASTRA_SL_UART0_SPI,
+                           GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+    qemu_fdt_setprop_cells(astra_sl_fdt, uart_node, "clocks",
+                           clock_phandle, clock_phandle);
+    qemu_fdt_setprop(astra_sl_fdt, uart_node, "clock-names",
+                     clocknames, sizeof(clocknames));
+    qemu_fdt_setprop_string(astra_sl_fdt, "/chosen", "stdout-path", uart_node);
+    qemu_fdt_setprop_string(astra_sl_fdt, "/aliases", "serial0", uart_node);
+}
 
 static void astra_sl_init(MachineState *machine)
 {
@@ -108,7 +214,9 @@ static void astra_sl_init(MachineState *machine)
     torq_create(ASTRA_SL_DEV_BASE, pic[ASTRA_SL_DEV_SPI]);
 
     /* Boot */
+    astra_sl_create_fdt(machine);
     astra_sl_binfo.ram_size = machine->ram_size;
+    astra_sl_binfo.get_dtb = astra_sl_get_dtb;
     arm_load_kernel(ARM_CPU(first_cpu), machine, &astra_sl_binfo);
 }
 
