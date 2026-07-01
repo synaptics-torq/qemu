@@ -1,8 +1,16 @@
 #!/bin/bash 
 
-wget https://cdimage.ubuntu.com/ubuntu/releases/noble/release/ubuntu-24.04.4-netboot-arm64.tar.gz
+BASEDIR="$(dirname ${BASH_SOURCE[0]})"
 
-tar -xzf ubuntu-24.04.4-netboot-arm64.tar.gz
+cd "$BASEDIR"
 
-./build/qemu-system-aarch64 -machine astra_sl -kernel arm64/linux -initrd arm64/initrd -append "console=ttyAMA0 rdinit=/bin/sh" -nographic
+if [[ ! -d arm64 ]]; then  
+  wget https://cdimage.ubuntu.com/ubuntu/releases/noble/release/ubuntu-24.04.4-netboot-arm64.tar.gz
+  tar -xzf ubuntu-24.04.4-netboot-arm64.tar.gz
+  rm ubuntu-24.04.4-netboot-arm64.tar.gz
+fi
+
+echo "Starting QEMU with Ubuntu 24.04.4 netboot image for Astra SL Baremetal..."
+
+../../build/qemu-system-aarch64 -machine astra_sl -kernel arm64/linux -initrd arm64/initrd -append "console=ttyS0,115200 rdinit=/bin/sh" -nographic
 

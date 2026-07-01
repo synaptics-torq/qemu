@@ -7,7 +7,7 @@ ifndef CDESC_DIR
 $(error CDESC_DIR is not set. Please set it to the directory containing the Torq headers)
 endif
 
-CFLAGS := -O2 -g -ffreestanding -fno-builtin -fno-stack-protector -Wall -Wextra -I$(CDESC_DIR)
+CFLAGS := -O2 -g -ffreestanding -fno-builtin -fno-stack-protector -Wall -Wextra -I$(CDESC_DIR) -I$(CDESC_DIR)/reg -I$(CDESC_DIR)/ct
 LDFLAGS := -nostdlib -Wl,--build-id=none -T linker.ld
 
 all: hello.elf hello.bin

@@ -5,16 +5,16 @@
 #include "torq_nss_regs.h"
 #include "torq_css_regs.h"
 
-#define PL011_BASE 0x09000000UL
-#define PL011_DR   (PL011_BASE + 0x00)
-#define PL011_FR   (PL011_BASE + 0x18)
-#define FR_TXFF    (1u << 5)
+#define PL011_BASE 0xe5030000UL
+#define UART_THR   (PL011_BASE + 0x00)  /* Transmit Holding Register */
+#define UART_LSR   (PL011_BASE + 0x14)  /* Line Status Register (regshift=2: offset 5*4) */
+#define LSR_THRE   (1u << 5)            /* Transmit Holding Register Empty */
 
 #define TORQ_BASE_ADDR 0x0a000000
 #define TORQ_IRQ       33U
 
-#define ASTRA_SL_GIC_DIST_BASE 0x08000000UL
-#define ASTRA_SL_GIC_CPU_BASE  0x08010000UL
+#define ASTRA_SL_GIC_DIST_BASE 0xf7e59000UL
+#define ASTRA_SL_GIC_CPU_BASE  0xf7e5a000UL
 
 #define GICD_CTLR              0x000U
 #define GICD_ISENABLER         0x100U
@@ -48,9 +48,9 @@ static inline void mmio_rmw32(uintptr_t addr, uint32_t mask, uint32_t value)
 
 static void uart_putc(char c)
 {
-    while (mmio_read32(PL011_FR) & FR_TXFF) {
+    while (!(mmio_read32(UART_LSR) & LSR_THRE)) {
     }
-    mmio_write32(PL011_DR, (uint32_t)c);
+    mmio_write32(UART_THR, (uint32_t)c);
 }
 
 static void uart_puts(const char *s)
