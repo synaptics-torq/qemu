@@ -18,6 +18,7 @@
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/units.h"
+#include "system/blockdev.h"
 #include "system/device_tree.h"
 #include "hw/core/boards.h"
 #include "system/system.h"
@@ -29,6 +30,8 @@
 #include "hw/char/pl011.h"
 #include "hw/intc/arm_gic.h"
 #include "hw/misc/torq.h"
+#include "hw/sd/sd.h"
+#include "hw/sd/sdhci.h"
 #include "target/arm/cpu-qom.h"
 #include "system/address-spaces.h"
 
@@ -38,12 +41,15 @@
 #define ASTRA_SL_UART0_BASE      0x09000000
 #define ASTRA_SL_DEV_BASE        0x0a000000
 #define ASTRA_SL_DEV_SIZE        TORQ_MMIO_SIZE
+#define ASTRA_SL_EMMC_BASE       0x10000000
+#define ASTRA_SL_EMMC_SIZE       0x00001000
 #define ASTRA_SL_RAM_BASE        0x40000000
 #define ASTRA_SL_RAM_SIZE        (2 * GiB)
 
 /* SPI input line indices (GIC interrupt ID = 32 + index) */
 #define ASTRA_SL_UART0_SPI       0    /* SPI ID 32 */
 #define ASTRA_SL_DEV_SPI         1    /* SPI ID 33 */
+#define ASTRA_SL_EMMC_SPI        2    /* SPI ID 34 */
 
 #define ASTRA_SL_NUM_IRQS        64
 #define ASTRA_SL_NUM_CPUS        1
@@ -73,6 +79,9 @@ static void astra_sl_create_fdt(MachineState *machine)
     const char clocknames[] = "uartclk\0apb_pclk";
     const char timer_compat[] = "arm,armv8-timer\0arm,armv7-timer";
     const char *uart_node = "/pl011@9000000";
+    const char *emmc_node = "/mmc@10000000";
+    const char sdhci_compat[] = "arasan,sdhci-8.9a";
+    const char sdhci_clocknames[] = "clk_xin\0clk_ahb";
 
     astra_sl_fdt = create_device_tree(&astra_sl_fdt_size);
     if (!astra_sl_fdt) {
@@ -154,13 +163,35 @@ static void astra_sl_create_fdt(MachineState *machine)
                      clocknames, sizeof(clocknames));
     qemu_fdt_setprop_string(astra_sl_fdt, "/chosen", "stdout-path", uart_node);
     qemu_fdt_setprop_string(astra_sl_fdt, "/aliases", "serial0", uart_node);
+
+    qemu_fdt_add_subnode(astra_sl_fdt, emmc_node);
+    qemu_fdt_setprop(astra_sl_fdt, emmc_node, "compatible",
+                     sdhci_compat, sizeof(sdhci_compat));
+    qemu_fdt_setprop_sized_cells(astra_sl_fdt, emmc_node, "reg",
+                                 2, ASTRA_SL_EMMC_BASE,
+                                 2, ASTRA_SL_EMMC_SIZE);
+    qemu_fdt_setprop_cells(astra_sl_fdt, emmc_node, "interrupts",
+                           GIC_FDT_IRQ_TYPE_SPI,
+                           ASTRA_SL_EMMC_SPI,
+                           GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+    qemu_fdt_setprop_cells(astra_sl_fdt, emmc_node, "clocks",
+                           clock_phandle, clock_phandle);
+    qemu_fdt_setprop(astra_sl_fdt, emmc_node, "clock-names",
+                     sdhci_clocknames, sizeof(sdhci_clocknames));
+    qemu_fdt_setprop_cell(astra_sl_fdt, emmc_node, "bus-width", 8);
+    qemu_fdt_setprop(astra_sl_fdt, emmc_node, "non-removable", NULL, 0);
 }
 
 static void astra_sl_init(MachineState *machine)
 {
+    DriveInfo *di;
+    BlockBackend *blk;
     MemoryRegion *sysmem = get_system_memory();
+    DeviceState *carddev;
     DeviceState *gicdev;
+    DeviceState *sdhci;
     SysBusDevice *gicbusdev;
+    SysBusDevice *sdhcibusdev;
     qemu_irq pic[ASTRA_SL_NUM_IRQS];
     int i;
 
@@ -213,6 +244,21 @@ static void astra_sl_init(MachineState *machine)
     /* TORQ device */
     torq_create(ASTRA_SL_DEV_BASE, pic[ASTRA_SL_DEV_SPI]);
 
+    /* eMMC via a minimal SDHCI controller */
+    sdhci = qdev_new(TYPE_SYSBUS_SDHCI);
+    qdev_prop_set_uint8(sdhci, "sd-spec-version", 3);
+    sdhcibusdev = SYS_BUS_DEVICE(sdhci);
+    sysbus_realize_and_unref(sdhcibusdev, &error_fatal);
+    sysbus_mmio_map(sdhcibusdev, 0, ASTRA_SL_EMMC_BASE);
+    sysbus_connect_irq(sdhcibusdev, 0, pic[ASTRA_SL_EMMC_SPI]);
+
+    di = drive_get(IF_SD, 0, 0);
+    blk = di ? blk_by_legacy_dinfo(di) : NULL;
+    carddev = qdev_new(TYPE_EMMC);
+    qdev_prop_set_drive_err(carddev, "drive", blk, &error_fatal);
+    qdev_realize_and_unref(carddev, qdev_get_child_bus(sdhci, "sd-bus"),
+                           &error_fatal);
+
     /* Boot */
     astra_sl_create_fdt(machine);
     astra_sl_binfo.ram_size = machine->ram_size;
@@ -231,8 +277,10 @@ static void astra_sl_machine_init(MachineClass *mc)
     mc->init              = astra_sl_init;
     mc->default_cpu_type  = ARM_CPU_TYPE_NAME("cortex-a53");
     mc->valid_cpu_types   = valid_cpu_types;
+    mc->block_default_type = IF_SD;
     mc->default_ram_size  = ASTRA_SL_RAM_SIZE;
     mc->default_ram_id    = "astra_sl.ram";
+    mc->units_per_default_bus = 1;
     mc->max_cpus          = ASTRA_SL_NUM_CPUS;
     mc->ignore_memory_transaction_failures = true;
 }
