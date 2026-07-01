@@ -10,8 +10,8 @@
 #define UART_LSR   (PL011_BASE + 0x14)  /* Line Status Register (regshift=2: offset 5*4) */
 #define LSR_THRE   (1u << 5)            /* Transmit Holding Register Empty */
 
-#define TORQ_BASE_ADDR 0x0a000000
-#define TORQ_IRQ       33U
+#define TORQ_BASE_ADDR 0xf7600000
+#define TORQ_IRQ       84U
 
 #define ASTRA_SL_GIC_DIST_BASE 0xf7e59000UL
 #define ASTRA_SL_GIC_CPU_BASE  0xf7e5a000UL

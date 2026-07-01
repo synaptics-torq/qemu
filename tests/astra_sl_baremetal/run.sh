@@ -8,7 +8,7 @@ if [ "$#" -ne 1 ]; then
     exit 1
 fi
 
-BASEDIR="$(dirname ${BASH_SOURCE[0]})"
+BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 pushd "$BASEDIR"
 make  CDESC_DIR=$1

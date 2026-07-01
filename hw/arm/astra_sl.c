@@ -41,7 +41,7 @@
 #define ASTRA_SL_GIC_HYP_BASE    0xf7e5c000
 #define ASTRA_SL_GIC_VCPU_BASE   0xf7e5e000
 #define ASTRA_SL_UART0_BASE      0xe5030000
-#define ASTRA_SL_DEV_BASE        0x0a000000
+#define ASTRA_SL_DEV_BASE        0xf7600000
 #define ASTRA_SL_DEV_SIZE        TORQ_MMIO_SIZE
 #define ASTRA_SL_EMMC_BASE       0xf7a00000
 #define ASTRA_SL_EMMC_SIZE       0x00001000
@@ -50,7 +50,8 @@
 
 /* SPI input line indices (matching sl2611.dtsi) */
 #define ASTRA_SL_UART0_SPI       130  /* uart0 SPI ID 130 */
-#define ASTRA_SL_DEV_SPI         1    /* TORQ device SPI ID 1 */
+#define ASTRA_SL_DEV_JOB_SPI     52   /* TORQ job SPI ID 52 */
+#define ASTRA_SL_DEV_FAULT_SPI   207  /* TORQ fault SPI ID 207 */
 #define ASTRA_SL_EMMC_SPI        13   /* sdhci0 SPI ID 13 */
 
 #define ASTRA_SL_NUM_IRQS        256
@@ -80,9 +81,11 @@ static void astra_sl_create_fdt(MachineState *machine)
     const char compat[] = "snps,dw-apb-uart";
     const char timer_compat[] = "arm,armv8-timer\0arm,armv7-timer";
     const char *uart_node = "/uart@e5030000";
+    const char *synpu_node = "/synpu@f7600000";
     const char *emmc_node = "/mmc@f7a00000";
     const char sdhci_compat[] = "snps,dwcmshc-sdhci";
     const char sdhci_clocknames[] = "core\0bus";
+    const char synpu_interrupt_names[] = "job\0fault";
 
     astra_sl_fdt = create_device_tree(&astra_sl_fdt_size);
     if (!astra_sl_fdt) {
@@ -160,6 +163,22 @@ static void astra_sl_create_fdt(MachineState *machine)
     qemu_fdt_setprop_cell(astra_sl_fdt, uart_node, "reg-shift", 2);
     qemu_fdt_setprop_string(astra_sl_fdt, "/chosen", "stdout-path", uart_node);
     qemu_fdt_setprop_string(astra_sl_fdt, "/aliases", "serial0", uart_node);
+
+    qemu_fdt_add_subnode(astra_sl_fdt, synpu_node);
+    qemu_fdt_setprop_string(astra_sl_fdt, synpu_node, "compatible", "syna,npu");
+    qemu_fdt_setprop_sized_cells(astra_sl_fdt, synpu_node, "reg",
+                                 2, ASTRA_SL_DEV_BASE, 2, ASTRA_SL_DEV_SIZE);
+    qemu_fdt_setprop_string(astra_sl_fdt, synpu_node, "reg-names", "npu_region");
+    qemu_fdt_setprop_cells(astra_sl_fdt, synpu_node, "interrupts",
+                           GIC_FDT_IRQ_TYPE_SPI,
+                           ASTRA_SL_DEV_JOB_SPI,
+                           GIC_FDT_IRQ_FLAGS_LEVEL_HI,
+                           GIC_FDT_IRQ_TYPE_SPI,
+                           ASTRA_SL_DEV_FAULT_SPI,
+                           GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+    qemu_fdt_setprop(astra_sl_fdt, synpu_node, "interrupt-names",
+                     synpu_interrupt_names, sizeof(synpu_interrupt_names));
+    qemu_fdt_setprop_string(astra_sl_fdt, synpu_node, "status", "disabled");
 
     qemu_fdt_add_subnode(astra_sl_fdt, emmc_node);
     qemu_fdt_setprop(astra_sl_fdt, emmc_node, "compatible",
@@ -243,8 +262,8 @@ static void astra_sl_init(MachineState *machine)
                    pic[ASTRA_SL_UART0_SPI], 115200, serial_hd(0),
                    DEVICE_LITTLE_ENDIAN);
 
-    /* TORQ device */
-    torq_create(ASTRA_SL_DEV_BASE, pic[ASTRA_SL_DEV_SPI]);
+    /* TORQ device: model exposes only one IRQ, wired to the "job" line. */
+    torq_create(ASTRA_SL_DEV_BASE, pic[ASTRA_SL_DEV_JOB_SPI]);
 
     /* eMMC via a minimal SDHCI controller */
     sdhci = qdev_new(TYPE_SYSBUS_SDHCI);
