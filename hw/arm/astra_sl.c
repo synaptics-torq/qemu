@@ -32,6 +32,7 @@
 #include "hw/misc/torq.h"
 #include "hw/sd/sd.h"
 #include "hw/sd/sdhci.h"
+#include "target/arm/cpu.h"
 #include "target/arm/cpu-qom.h"
 #include "system/address-spaces.h"
 
@@ -48,6 +49,13 @@
 #define ASTRA_SL_RAM_BASE        0x40000000
 #define ASTRA_SL_RAM_SIZE        (2 * GiB)
 
+/* Free MMIO window in the sl2611.dtsi address map (between 0xf7800000 and
+ * 0xf7a00000) used for the emulated virtio-mmio transport.
+ */
+#define ASTRA_SL_VIRTIO_MMIO_BASE  0xf7880000
+#define ASTRA_SL_VIRTIO_MMIO_SIZE  0x1000
+#define ASTRA_SL_VIRTIO_MMIO_SPI   208  /* free SPI ID per sl2611.dtsi */
+
 /* SPI input line indices (matching sl2611.dtsi) */
 #define ASTRA_SL_UART0_SPI       130  /* uart0 SPI ID 130 */
 #define ASTRA_SL_DEV_JOB_SPI     52   /* TORQ job SPI ID 52 */
@@ -55,11 +63,15 @@
 #define ASTRA_SL_EMMC_SPI        13   /* sdhci0 SPI ID 13 */
 
 #define ASTRA_SL_NUM_IRQS        256
-#define ASTRA_SL_NUM_CPUS        1
+#define ASTRA_SL_NUM_CPUS        2
 
 static struct arm_boot_info astra_sl_binfo = {
     .loader_start = ASTRA_SL_RAM_BASE,
     .board_id     = -1, /* no board ID; rely on device tree */
+    /* Use QEMU's emulated PSCI (SMC conduit) so the guest can power on the
+     * secondary Cortex-A55 core. Matches the real board's PSCI node
+     * (arm,psci-1.0, method = "smc"). */
+    .psci_conduit = QEMU_PSCI_CONDUIT_SMC,
 };
 
 static void *astra_sl_fdt;
@@ -71,20 +83,20 @@ static void *astra_sl_get_dtb(const struct arm_boot_info *binfo, int *fdt_size)
     return astra_sl_fdt;
 }
 
-static void astra_sl_create_fdt(MachineState *machine)
+static void astra_sl_create_fdt(MachineState *machine, int smp_cpus)
 {
     uint32_t clock_phandle;
     uint32_t gic_phandle;
+    /* GICv2 PPI per-CPU mask bits covering all CPUs (GIC_CPU_MASK_SIMPLE(n)). */
     uint32_t timer_irqflags = deposit32(GIC_FDT_IRQ_FLAGS_LEVEL_HI,
                                         GIC_FDT_IRQ_PPI_CPU_START,
-                                        GIC_FDT_IRQ_PPI_CPU_WIDTH, 1);
+                                        GIC_FDT_IRQ_PPI_CPU_WIDTH,
+                                        (1 << smp_cpus) - 1);
     const char compat[] = "snps,dw-apb-uart";
     const char timer_compat[] = "arm,armv8-timer\0arm,armv7-timer";
     const char *uart_node = "/uart@e5030000";
-    const char *synpu_node = "/synpu@f7600000";
-    const char *emmc_node = "/mmc@f7a00000";
-    const char sdhci_compat[] = "snps,dwcmshc-sdhci";
-    const char sdhci_clocknames[] = "core\0bus";
+    const char *synpu_node = "/synpu@f7600000";    
+    const char *virtio_node = "/virtio_mmio@f7880000";
     const char synpu_interrupt_names[] = "job\0fault";
 
     astra_sl_fdt = create_device_tree(&astra_sl_fdt_size);
@@ -113,14 +125,30 @@ static void astra_sl_create_fdt(MachineState *machine)
     qemu_fdt_setprop_cell(astra_sl_fdt, "/apb-pclk", "phandle",
                           clock_phandle);
 
-    qemu_fdt_add_subnode(astra_sl_fdt, "/cpus");
-    qemu_fdt_setprop_cell(astra_sl_fdt, "/cpus", "#address-cells", 0x2);
-    qemu_fdt_setprop_cell(astra_sl_fdt, "/cpus", "#size-cells", 0x0);
-    qemu_fdt_add_subnode(astra_sl_fdt, "/cpus/cpu@0");
-    qemu_fdt_setprop_string(astra_sl_fdt, "/cpus/cpu@0", "device_type", "cpu");
-    qemu_fdt_setprop_string(astra_sl_fdt, "/cpus/cpu@0", "compatible",
-                            "arm,cortex-a55");
-    qemu_fdt_setprop_u64(astra_sl_fdt, "/cpus/cpu@0", "reg", 0);
+    {
+        int i;
+
+        qemu_fdt_add_subnode(astra_sl_fdt, "/cpus");
+        qemu_fdt_setprop_cell(astra_sl_fdt, "/cpus", "#address-cells", 0x2);
+        qemu_fdt_setprop_cell(astra_sl_fdt, "/cpus", "#size-cells", 0x0);
+        for (i = 0; i < smp_cpus; i++) {
+            char *node = g_strdup_printf("/cpus/cpu@%d", i);
+
+            qemu_fdt_add_subnode(astra_sl_fdt, node);
+            qemu_fdt_setprop_string(astra_sl_fdt, node, "device_type", "cpu");
+            qemu_fdt_setprop_string(astra_sl_fdt, node, "compatible",
+                                    "arm,cortex-a55");
+            /* enable-method "psci": secondary CPUs are powered on by the
+             * QEMU-emulated PSCI CPU_ON call. */
+            qemu_fdt_setprop_string(astra_sl_fdt, node, "enable-method",
+                                    "psci");
+            /* The MPIDR affinity must match arm_cpu_mp_affinity() for this
+             * CPU (a single cluster of A55 cores), so that PSCI's
+             * arm_set_cpu_on() can resolve the target. */
+            qemu_fdt_setprop_u64(astra_sl_fdt, node, "reg", i);
+            g_free(node);
+        }
+    }
 
     gic_phandle = qemu_fdt_alloc_phandle(astra_sl_fdt);
     qemu_fdt_setprop_cell(astra_sl_fdt, "/", "interrupt-parent", gic_phandle);
@@ -179,37 +207,68 @@ static void astra_sl_create_fdt(MachineState *machine)
     qemu_fdt_setprop(astra_sl_fdt, synpu_node, "interrupt-names",
                      synpu_interrupt_names, sizeof(synpu_interrupt_names));
     qemu_fdt_setprop_string(astra_sl_fdt, synpu_node, "status", "disabled");
-
-    qemu_fdt_add_subnode(astra_sl_fdt, emmc_node);
-    qemu_fdt_setprop(astra_sl_fdt, emmc_node, "compatible",
-                     sdhci_compat, sizeof(sdhci_compat));
-    qemu_fdt_setprop_sized_cells(astra_sl_fdt, emmc_node, "reg",
-                                 2, ASTRA_SL_EMMC_BASE,
-                                 2, ASTRA_SL_EMMC_SIZE);
-    qemu_fdt_setprop_cells(astra_sl_fdt, emmc_node, "interrupts",
-                           GIC_FDT_IRQ_TYPE_SPI,
-                           ASTRA_SL_EMMC_SPI,
-                           GIC_FDT_IRQ_FLAGS_LEVEL_HI);
-    qemu_fdt_setprop_cells(astra_sl_fdt, emmc_node, "clocks",
-                           clock_phandle, clock_phandle);
-    qemu_fdt_setprop(astra_sl_fdt, emmc_node, "clock-names",
-                     sdhci_clocknames, sizeof(sdhci_clocknames));
-    qemu_fdt_setprop_cell(astra_sl_fdt, emmc_node, "bus-width", 8);
-    qemu_fdt_setprop(astra_sl_fdt, emmc_node, "non-removable", NULL, 0);
+    qemu_fdt_add_subnode(astra_sl_fdt, virtio_node);
+    qemu_fdt_setprop_string(astra_sl_fdt, virtio_node, "compatible",
+                            "virtio,mmio");
+    qemu_fdt_setprop_sized_cells(astra_sl_fdt, virtio_node, "reg",
+                                 2, ASTRA_SL_VIRTIO_MMIO_BASE,
+                                 2, ASTRA_SL_VIRTIO_MMIO_SIZE);
+    qemu_fdt_setprop_cells(astra_sl_fdt, virtio_node, "interrupts",
+                           GIC_FDT_IRQ_TYPE_SPI, ASTRA_SL_VIRTIO_MMIO_SPI,
+                           GIC_FDT_IRQ_FLAGS_EDGE_LO_HI);
+    qemu_fdt_setprop(astra_sl_fdt, virtio_node, "dma-coherent", NULL, 0);
 }
 
+/*
+ * Single cluster of Cortex-A55 cores. arm_build_mp_affinity() returns the
+ * core index as MPIDR for the default cluster size (8), so the FDT "reg"
+ * value for cpu@<i> is simply <i> and PSCI's arm_set_cpu_on() (which matches
+ * on arm_cpu_mp_affinity) resolves the target.
+ */
+static const CPUArchIdList *astra_sl_possible_cpu_arch_ids(MachineState *ms)
+{
+    unsigned int max_cpus = ms->smp.max_cpus;
+    int n;
+
+    if (ms->possible_cpus) {
+        assert(ms->possible_cpus->len == max_cpus);
+        return ms->possible_cpus;
+    }
+
+    ms->possible_cpus = g_malloc0(sizeof(CPUArchIdList) +
+                                  sizeof(CPUArchId) * max_cpus);
+    ms->possible_cpus->len = max_cpus;
+    for (n = 0; n < ms->possible_cpus->len; n++) {
+        ms->possible_cpus->cpus[n].type = ms->cpu_type;
+        ms->possible_cpus->cpus[n].arch_id = arm_build_mp_affinity(n,
+                                                                   ARM_DEFAULT_CPUS_PER_CLUSTER);
+        ms->possible_cpus->cpus[n].props.has_core_id = true;
+        ms->possible_cpus->cpus[n].props.core_id = n;
+    }
+    return ms->possible_cpus;
+}
+
+/*
+ * Provide a virtio-mmio transport slot at ASTRA_SL_VIRTIO_MMIO_BASE. The user
+ * attaches a backend to it from the command line, e.g.:
+ *   -device virtio-blk-device,drive=rootfs
+ * QEMU auto-plugs the device onto the free virtio-mmio bus. An empty slot
+ * (no -device attached) is harmless: the guest sees the transport but no
+ * device, exactly like the "virt" machine does.
+ */
 static void astra_sl_init(MachineState *machine)
 {
-    DriveInfo *di;
-    BlockBackend *blk;
     MemoryRegion *sysmem = get_system_memory();
-    DeviceState *carddev;
+    const CPUArchIdList *possible_cpus;
     DeviceState *gicdev;
-    DeviceState *sdhci;
     SysBusDevice *gicbusdev;
-    SysBusDevice *sdhcibusdev;
     qemu_irq pic[ASTRA_SL_NUM_IRQS];
+    int smp_cpus;
     int i;
+
+    /* Number of CPUs to actually create (capped by the hardware maximum). */
+    smp_cpus = MIN(machine->smp.cpus, ASTRA_SL_NUM_CPUS);
+    possible_cpus = astra_sl_possible_cpu_arch_ids(machine);
 
     /* Validate RAM size */
     if (machine->ram_size > ASTRA_SL_RAM_SIZE) {
@@ -218,10 +277,14 @@ static void astra_sl_init(MachineState *machine)
         exit(1);
     }
 
-    /* Create and realize CPUs */
-    for (i = 0; i < ASTRA_SL_NUM_CPUS; i++) {
-        Object *cpuobj = object_new(machine->cpu_type);
+    /* Create and realize CPUs, each with an MPIDR affinity matching the FDT
+     * cpu@<i> "reg" (see astra_sl_possible_cpu_arch_ids). */
+    for (i = 0; i < smp_cpus; i++) {
+        Object *cpuobj = object_new(possible_cpus->cpus[i].type);
+
         object_property_add_child(OBJECT(machine), "cpu[*]", cpuobj);
+        object_property_set_uint(cpuobj, "mp-affinity",
+                                 possible_cpus->cpus[i].arch_id, &error_fatal);
         qdev_realize(DEVICE(cpuobj), NULL, &error_fatal);
         object_unref(cpuobj);
     }
@@ -232,7 +295,7 @@ static void astra_sl_init(MachineState *machine)
     /* GIC-400 (GICv2 with virtualization extensions) */
     gicdev = qdev_new(TYPE_ARM_GIC);
     qdev_prop_set_uint32(gicdev, "revision", 2);
-    qdev_prop_set_uint32(gicdev, "num-cpu", ASTRA_SL_NUM_CPUS);
+    qdev_prop_set_uint32(gicdev, "num-cpu", smp_cpus);
     qdev_prop_set_uint32(gicdev, "num-irq",
                          ASTRA_SL_NUM_IRQS + GIC_INTERNAL);
     qdev_prop_set_bit(gicdev, "has-virtualization-extensions", true);
@@ -244,11 +307,11 @@ static void astra_sl_init(MachineState *machine)
     sysbus_mmio_map(gicbusdev, 3, ASTRA_SL_GIC_VCPU_BASE);
 
     /* Wire GIC outputs to each CPU's IRQ/FIQ inputs */
-    for (i = 0; i < ASTRA_SL_NUM_CPUS; i++) {
+    for (i = 0; i < smp_cpus; i++) {
         DeviceState *cpudev = DEVICE(qemu_get_cpu(i));
         sysbus_connect_irq(gicbusdev, i,
                            qdev_get_gpio_in(cpudev, ARM_CPU_IRQ));
-        sysbus_connect_irq(gicbusdev, i + ASTRA_SL_NUM_CPUS,
+        sysbus_connect_irq(gicbusdev, i + smp_cpus,
                            qdev_get_gpio_in(cpudev, ARM_CPU_FIQ));
     }
 
@@ -265,23 +328,13 @@ static void astra_sl_init(MachineState *machine)
     /* TORQ device: model exposes only one IRQ, wired to the "job" line. */
     torq_create(ASTRA_SL_DEV_BASE, pic[ASTRA_SL_DEV_JOB_SPI]);
 
-    /* eMMC via a minimal SDHCI controller */
-    sdhci = qdev_new(TYPE_SYSBUS_SDHCI);
-    qdev_prop_set_uint8(sdhci, "sd-spec-version", 3);
-    sdhcibusdev = SYS_BUS_DEVICE(sdhci);
-    sysbus_realize_and_unref(sdhcibusdev, &error_fatal);
-    sysbus_mmio_map(sdhcibusdev, 0, ASTRA_SL_EMMC_BASE);
-    sysbus_connect_irq(sdhcibusdev, 0, pic[ASTRA_SL_EMMC_SPI]);
-
-    di = drive_get(IF_SD, 0, 0);
-    blk = di ? blk_by_legacy_dinfo(di) : NULL;
-    carddev = qdev_new(TYPE_EMMC);
-    qdev_prop_set_drive_err(carddev, "drive", blk, &error_fatal);
-    qdev_realize_and_unref(carddev, qdev_get_child_bus(sdhci, "sd-bus"),
-                           &error_fatal);
+    /* Virtio-mmio transport slot; backends are attached via -device
+     * (e.g. -device virtio-blk-device,drive=...). */
+    sysbus_create_simple("virtio-mmio", ASTRA_SL_VIRTIO_MMIO_BASE,
+                         pic[ASTRA_SL_VIRTIO_MMIO_SPI]);
 
     /* Boot */
-    astra_sl_create_fdt(machine);
+    astra_sl_create_fdt(machine, smp_cpus);
     astra_sl_binfo.ram_size = machine->ram_size;
     astra_sl_binfo.get_dtb = astra_sl_get_dtb;
     arm_load_kernel(ARM_CPU(first_cpu), machine, &astra_sl_binfo);
@@ -294,7 +347,7 @@ static void astra_sl_machine_init(MachineClass *mc)
         NULL
     };
 
-    mc->desc              = "Astra SL board (Cortex-A55)";
+    mc->desc              = "Astra SL board (dual Cortex-A55)";
     mc->init              = astra_sl_init;
     mc->default_cpu_type  = ARM_CPU_TYPE_NAME("cortex-a55");
     mc->valid_cpu_types   = valid_cpu_types;
@@ -303,6 +356,11 @@ static void astra_sl_machine_init(MachineClass *mc)
     mc->default_ram_id    = "astra_sl.ram";
     mc->units_per_default_bus = 1;
     mc->max_cpus          = ASTRA_SL_NUM_CPUS;
+    /* Two cores by default so a plain `-machine astra_sl` brings up the
+     * dual-core A55. default_cpus also drives ms->smp.max_cpus, which TCG
+     * uses to size its execution thread pool. */
+    mc->default_cpus      = ASTRA_SL_NUM_CPUS;
+    mc->possible_cpu_arch_ids = astra_sl_possible_cpu_arch_ids;
     mc->ignore_memory_transaction_failures = true;
 }
 
