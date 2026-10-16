@@ -86,6 +86,25 @@ irq_entry:
     eret
 
 _start:
+    /* The Astra SL machine now boots two cores by default. QEMU's PSCI conduit
+     * is DISABLED for direct EL3 boots (boot_el==3, and an SMC can't trap to
+     * EL3 -- see hw/arm/boot.c:arm_load_kernel), so a secondary core is not
+     * parked by the host either; every CPU resets with PC=_start and starts
+     * executing the same image. This guest is single-threaded and assumes one
+     * core, so any non-zero core must be parked here, otherwise it runs
+     * main() concurrently with CPU0 and races the shared GIC/TORQ/UART state
+     * (garbled output, or a hard hang in torq_hw_wait() after one CPU clears
+     * the NSS IRQ while the other is still waiting on it). */
+    mrs x1, mpidr_el1
+    ubfx x0, x1, #0, #5      /* x0 = CPU number (MPIDR aff0) */
+    cbz x0, primary_start    /* only CPU0 continues */
+
+    /* Secondary core: park forever. */
+park:
+    wfe
+    b park
+
+primary_start:
     ldr x0, =__stack_top
     mov sp, x0
 
