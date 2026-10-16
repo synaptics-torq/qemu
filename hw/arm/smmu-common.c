@@ -847,6 +847,15 @@ SMMUPciBus *smmu_find_smmu_pcibus(SMMUState *s, uint8_t bus_num)
     return NULL;
 }
 
+static void smmu_sdev_init_iommu(SMMUState *s, SMMUDevice *sdev,
+                                 const char *name)
+{
+    memory_region_init_iommu(&sdev->iommu, sizeof(sdev->iommu),
+                             s->mrtypename, OBJECT(s), name, UINT64_MAX);
+    address_space_init(&sdev->as, MEMORY_REGION(&sdev->iommu), name);
+    trace_smmu_add_mr(name);
+}
+
 void smmu_init_sdev(SMMUState *s, SMMUDevice *sdev, PCIBus *bus, int devfn)
 {
     static unsigned int index;
@@ -856,10 +865,18 @@ void smmu_init_sdev(SMMUState *s, SMMUDevice *sdev, PCIBus *bus, int devfn)
     sdev->bus = bus;
     sdev->devfn = devfn;
 
-    memory_region_init_iommu(&sdev->iommu, sizeof(sdev->iommu),
-                             s->mrtypename, OBJECT(s), name, UINT64_MAX);
-    address_space_init(&sdev->as, MEMORY_REGION(&sdev->iommu), name);
-    trace_smmu_add_mr(name);
+    smmu_sdev_init_iommu(s, sdev, name);
+}
+
+static void smmu_init_platform_sdev(SMMUState *s, SMMUDevice *sdev, uint32_t sid)
+{
+    g_autofree char *name = g_strdup_printf("%s-plat-0x%x", s->mrtypename,
+                                            sid);
+    sdev->smmu = s;
+    sdev->platform = true;
+    sdev->sid = sid;
+
+    smmu_sdev_init_iommu(s, sdev, name);
 }
 
 SMMUPciBus *smmu_get_sbus(SMMUState *s, PCIBus *bus)
@@ -906,7 +923,26 @@ SMMUDevice *smmu_find_sdev(SMMUState *s, uint32_t sid)
         devfn = SMMU_PCI_DEVFN(sid);
         return smmu_bus->pbdev[devfn];
     }
+    /* Non-PCI masters: sid is the raw stream id. */
+    if (s->platform_sdev_by_sid) {
+        return g_hash_table_lookup(s->platform_sdev_by_sid, (void *)(uintptr_t)sid);
+    }
     return NULL;
+}
+
+AddressSpace *smmu_get_platform_master_as(SMMUState *s, uint32_t sid)
+{
+    SMMUDevice *sdev;
+
+    sdev = g_hash_table_lookup(s->platform_sdev_by_sid,
+                               (void *)(uintptr_t)sid);
+    if (!sdev) {
+        sdev = g_new0(SMMUDevice, 1);
+        smmu_init_platform_sdev(s, sdev, sid);
+        g_hash_table_insert(s->platform_sdev_by_sid,
+                            (void *)(uintptr_t)sid, sdev);
+    }
+    return &sdev->as;
 }
 
 /* Unmap all notifiers attached to @mr */
@@ -946,9 +982,11 @@ static void smmu_base_realize(DeviceState *dev, Error **errp)
     s->iotlb = g_hash_table_new_full(smmu_iotlb_key_hash, smmu_iotlb_key_equal,
                                      g_free, g_free);
     s->smmu_pcibus_by_busptr = g_hash_table_new(NULL, NULL);
+    s->platform_sdev_by_sid = g_hash_table_new(NULL, NULL);
 
+    /* A standalone SMMU (no PCI bus) only services platform masters
+     * registered via smmu_get_platform_master_as(). */
     if (!pci_bus) {
-        error_setg(errp, "SMMU is not attached to any PCI bus!");
         return;
     }
 

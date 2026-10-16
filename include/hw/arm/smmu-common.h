@@ -21,6 +21,7 @@
 
 #include "hw/core/sysbus.h"
 #include "hw/pci/pci.h"
+#include "system/address-spaces.h"
 #include "qom/object.h"
 
 #define SMMU_PCI_BUS_MAX                    256
@@ -122,6 +123,8 @@ typedef struct SMMUDevice {
     void               *smmu;
     PCIBus             *bus;
     int                devfn;
+    bool               platform; /* non-PCI master (stream id in @sid) */
+    uint32_t           sid;      /* stream id, used when @platform */
     IOMMUMemoryRegion  iommu;
     AddressSpace       as;
     uint32_t           cfg_cache_hits;
@@ -154,6 +157,7 @@ struct SMMUState {
     MemoryRegion iomem;
 
     GHashTable *smmu_pcibus_by_busptr;
+    GHashTable *platform_sdev_by_sid; /* sid -> SMMUDevice (non-PCI) */
     GHashTable *configs; /* cache for configuration data */
     GHashTable *iotlb;
     SMMUPciBus *smmu_pcibus_by_bus_num[SMMU_PCI_BUS_MAX];
@@ -192,8 +196,11 @@ SMMUPciBus *smmu_get_sbus(SMMUState *s, PCIBus *bus);
 void smmu_init_sdev(SMMUState *s, SMMUDevice *sdev, PCIBus *bus, int devfn);
 
 /* Return the stream ID of an SMMU device */
-static inline uint16_t smmu_get_sid(SMMUDevice *sdev)
+static inline uint32_t smmu_get_sid(SMMUDevice *sdev)
 {
+    if (sdev->platform) {
+        return sdev->sid;
+    }
     return PCI_BUILD_BDF(pci_bus_num(sdev->bus), sdev->devfn);
 }
 
@@ -220,6 +227,12 @@ SMMUTransTableInfo *select_tt(SMMUTransCfg *cfg, dma_addr_t iova);
 
 /* Return the SMMUDevice associated to @sid, or NULL if none */
 SMMUDevice *smmu_find_sdev(SMMUState *s, uint32_t sid);
+
+/*
+ * Get the DMA AddressSpace for a platform (non-PCI) master with the given
+ * stream id, creating the master if it does not yet exist.
+ */
+AddressSpace *smmu_get_platform_master_as(SMMUState *s, uint32_t sid);
 
 #define SMMU_IOTLB_MAX_SIZE 256
 

@@ -47,18 +47,23 @@ static void torq_write(void *opaque, hwaddr addr,
     torq_update_irq(s);
 }
 
+/* ctx is the TORQState (see torq_cm__set_ext_mem_if). */
 static int torq_cm_read_mem(void *ctx, uint32_t tag, size_t addr,
                             size_t size, uint8_t *data)
 {
-    return address_space_read(&address_space_memory, addr,
-                              MEMTXATTRS_UNSPECIFIED, data, size);
+    TORQState *s = ctx;
+    AddressSpace *as = s->dma_as;
+
+    return address_space_read(as, addr, MEMTXATTRS_UNSPECIFIED, data, size);
 }
 
 static int torq_cm_write_mem(void *ctx, uint32_t tag, size_t addr,
                              size_t size, uint8_t *data)
 {
-    return address_space_write(&address_space_memory, addr,
-                               MEMTXATTRS_UNSPECIFIED, data, size);
+    TORQState *s = ctx;
+    AddressSpace *as = s->dma_as;
+
+    return address_space_write(as, addr, MEMTXATTRS_UNSPECIFIED, data, size);
 }
 
 static const MemoryRegionOps torq_ops = {
@@ -79,6 +84,7 @@ static void torq_init(Object *obj)
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->mmio);
     sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq);
     s->mmio_base = 0;
+    s->dma_as = &address_space_memory;
 
     s->cm = torq_cm_open(0, 0, 0);
 
@@ -87,8 +93,17 @@ static void torq_init(Object *obj)
         exit(1);
     }
 
-    torq_cm__set_ext_mem_if(s->cm, NULL, torq_cm_read_mem, torq_cm_write_mem);
+    torq_cm__set_ext_mem_if(s->cm, s, torq_cm_read_mem, torq_cm_write_mem);
     torq_update_irq(s);
+}
+
+void torq_set_dma_as(DeviceState *dev, AddressSpace *as)
+{
+    TORQState *s = TORQ(dev);
+
+    if (as) {
+        s->dma_as = as;
+    }
 }
 
 static void torq_finalize(Object *obj)

@@ -44,6 +44,7 @@ config ASTRA_SL
     select ARM_GIC
     select PL011 # UART
     select TORQ
+    select ARM_SMMUV3
 
 config CUBIEBOARD
     bool

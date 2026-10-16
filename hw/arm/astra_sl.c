@@ -17,6 +17,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "qemu/guest-random.h"
 #include "qemu/units.h"
 #include "system/blockdev.h"
 #include "system/device_tree.h"
@@ -29,6 +30,8 @@
 #include "hw/arm/machines-qom.h"
 #include "hw/char/serial-mm.h"
 #include "hw/intc/arm_gic.h"
+#include "hw/arm/smmuv3.h"
+#include "hw/arm/smmu-common.h"
 #include "hw/misc/torq.h"
 #include "hw/sd/sd.h"
 #include "hw/sd/sdhci.h"
@@ -48,6 +51,19 @@
 #define ASTRA_SL_EMMC_SIZE       0x00001000
 #define ASTRA_SL_RAM_BASE        0x40000000
 #define ASTRA_SL_RAM_SIZE        (2 * GiB)
+
+/* SMMUv3 (ARM MMU-600) per sl2611.dtsi "smmu: iommu@f7800000". */
+#define ASTRA_SL_SMMU_BASE         0xf7800000
+#define ASTRA_SL_SMMU_SIZE         0x20000 /* SMMUv3 register window (like virt) */
+/* QEMU IRQ order: evtq(0), priq(1), cmdq-sync(2), gerror(3). The DT only
+ * declares eventq/priq/gerror (SPI 120/121/125); cmdq-sync is not in the DT,
+ * so it is wired to a free SPI that the guest never requests. */
+#define ASTRA_SL_SMMU_EVTQ_SPI     120  /* "eventq" */
+#define ASTRA_SL_SMMU_PRIQ_SPI     121  /* "priq" */
+#define ASTRA_SL_SMMU_SYNC_SPI     126  /* QEMU cmdq-sync (free SPI, not in DT) */
+#define ASTRA_SL_SMMU_GERROR_SPI   125  /* "gerror" */
+/* The single emulated TORQ master uses the first NPU stream id. */
+#define ASTRA_SL_TORQ_STREAM_ID    0x1
 
 /* Free MMIO window in the sl2611.dtsi address map (between 0xf7800000 and
  * 0xf7a00000) used for the emulated virtio-mmio transport.
@@ -87,6 +103,7 @@ static void astra_sl_create_fdt(MachineState *machine, int smp_cpus)
 {
     uint32_t clock_phandle;
     uint32_t gic_phandle;
+    uint32_t smmu_phandle;
     /* GICv2 PPI per-CPU mask bits covering all CPUs (GIC_CPU_MASK_SIMPLE(n)). */
     uint32_t timer_irqflags = deposit32(GIC_FDT_IRQ_FLAGS_LEVEL_HI,
                                         GIC_FDT_IRQ_PPI_CPU_START,
@@ -96,8 +113,10 @@ static void astra_sl_create_fdt(MachineState *machine, int smp_cpus)
     const char timer_compat[] = "arm,armv8-timer\0arm,armv7-timer";
     const char *uart_node = "/uart@e5030000";
     const char *synpu_node = "/synpu@f7600000";    
+    const char *smmu_node = "/iommu@f7800000";
     const char *virtio_node = "/virtio_mmio@f7880000";
     const char synpu_interrupt_names[] = "job\0fault";
+    const char smmu_interrupt_names[] = "eventq\0priq\0gerror";
 
     astra_sl_fdt = create_device_tree(&astra_sl_fdt_size);
     if (!astra_sl_fdt) {
@@ -112,6 +131,17 @@ static void astra_sl_create_fdt(MachineState *machine, int smp_cpus)
 
     qemu_fdt_add_subnode(astra_sl_fdt, "/chosen");
     qemu_fdt_add_subnode(astra_sl_fdt, "/aliases");
+
+    /* This machine has no hardware RNG, so seed the kernel's CRNG directly
+     * from the DT; otherwise boots can stall indefinitely on blocking
+     * getrandom() calls (e.g. systemd machine-id generation). */
+    {
+        uint8_t rng_seed[32];
+
+        qemu_guest_getrandom_nofail(rng_seed, sizeof(rng_seed));
+        qemu_fdt_setprop(astra_sl_fdt, "/chosen", "rng-seed",
+                         rng_seed, sizeof(rng_seed));
+    }
 
     clock_phandle = qemu_fdt_alloc_phandle(astra_sl_fdt);
     qemu_fdt_add_subnode(astra_sl_fdt, "/apb-pclk");
@@ -151,6 +181,7 @@ static void astra_sl_create_fdt(MachineState *machine, int smp_cpus)
     }
 
     gic_phandle = qemu_fdt_alloc_phandle(astra_sl_fdt);
+    smmu_phandle = qemu_fdt_alloc_phandle(astra_sl_fdt);
     qemu_fdt_setprop_cell(astra_sl_fdt, "/", "interrupt-parent", gic_phandle);
     qemu_fdt_add_subnode(astra_sl_fdt, "/intc@f7e59000");
     qemu_fdt_setprop_string(astra_sl_fdt, "/intc@f7e59000", "compatible",
@@ -206,7 +237,34 @@ static void astra_sl_create_fdt(MachineState *machine, int smp_cpus)
                            GIC_FDT_IRQ_FLAGS_LEVEL_HI);
     qemu_fdt_setprop(astra_sl_fdt, synpu_node, "interrupt-names",
                      synpu_interrupt_names, sizeof(synpu_interrupt_names));
+    /* NPU stream ids (matches the real NPU's iommus property). */
+    qemu_fdt_setprop_cells(astra_sl_fdt, synpu_node, "iommus",
+                           smmu_phandle, 0x1,
+                           smmu_phandle, 0x2,
+                           smmu_phandle, 0x3,
+                           smmu_phandle, 0x4);
     qemu_fdt_setprop_string(astra_sl_fdt, synpu_node, "status", "disabled");
+
+    /* SMMUv3 (ARM MMU-600), matching sl2611.dtsi "smmu: iommu@f7800000". */
+    qemu_fdt_add_subnode(astra_sl_fdt, smmu_node);
+    qemu_fdt_setprop_string(astra_sl_fdt, smmu_node, "compatible", "arm,smmu-v3");
+    qemu_fdt_setprop_sized_cells(astra_sl_fdt, smmu_node, "reg",
+                                 2, ASTRA_SL_SMMU_BASE, 2, ASTRA_SL_SMMU_SIZE);
+    qemu_fdt_setprop_cell(astra_sl_fdt, smmu_node, "#iommu-cells", 1);
+    qemu_fdt_setprop_cell(astra_sl_fdt, smmu_node, "#address-cells", 2);
+    qemu_fdt_setprop_cell(astra_sl_fdt, smmu_node, "#size-cells", 2);
+    qemu_fdt_setprop_cells(astra_sl_fdt, smmu_node, "interrupts",
+                           GIC_FDT_IRQ_TYPE_SPI, ASTRA_SL_SMMU_EVTQ_SPI,
+                           GIC_FDT_IRQ_FLAGS_LEVEL_HI,
+                           GIC_FDT_IRQ_TYPE_SPI, ASTRA_SL_SMMU_PRIQ_SPI,
+                           GIC_FDT_IRQ_FLAGS_LEVEL_HI,
+                           GIC_FDT_IRQ_TYPE_SPI, ASTRA_SL_SMMU_GERROR_SPI,
+                           GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+    qemu_fdt_setprop(astra_sl_fdt, smmu_node, "interrupt-names",
+                     smmu_interrupt_names, sizeof(smmu_interrupt_names));
+    qemu_fdt_setprop_cell(astra_sl_fdt, smmu_node, "phandle", smmu_phandle);
+    qemu_fdt_setprop_string(astra_sl_fdt, smmu_node, "status", "okay");
+
     qemu_fdt_add_subnode(astra_sl_fdt, virtio_node);
     qemu_fdt_setprop_string(astra_sl_fdt, virtio_node, "compatible",
                             "virtio,mmio");
@@ -265,6 +323,8 @@ static void astra_sl_init(MachineState *machine)
     qemu_irq pic[ASTRA_SL_NUM_IRQS];
     int smp_cpus;
     int i;
+    DeviceState *smmu;
+    DeviceState *torq;
 
     /* Number of CPUs to actually create (capped by the hardware maximum). */
     smp_cpus = MIN(machine->smp.cpus, ASTRA_SL_NUM_CPUS);
@@ -325,8 +385,23 @@ static void astra_sl_init(MachineState *machine)
                    pic[ASTRA_SL_UART0_SPI], 115200, serial_hd(0),
                    DEVICE_LITTLE_ENDIAN);
 
-    /* TORQ device: model exposes only one IRQ, wired to the "job" line. */
-    torq_create(ASTRA_SL_DEV_BASE, pic[ASTRA_SL_DEV_JOB_SPI]);
+    /* SMMUv3 (ARM MMU-600): a standalone device with no PCI. Created after
+     * the GIC so its SPIs are available; it services the TORQ master. */
+    smmu = qdev_new(TYPE_ARM_SMMUV3);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(smmu), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(smmu), 0, ASTRA_SL_SMMU_BASE);
+    /* QEMU SMMU IRQ order: evtq(0), priq(1), cmdq-sync(2), gerror(3). */
+    sysbus_connect_irq(SYS_BUS_DEVICE(smmu), 0, pic[ASTRA_SL_SMMU_EVTQ_SPI]);
+    sysbus_connect_irq(SYS_BUS_DEVICE(smmu), 1, pic[ASTRA_SL_SMMU_PRIQ_SPI]);
+    sysbus_connect_irq(SYS_BUS_DEVICE(smmu), 2, pic[ASTRA_SL_SMMU_SYNC_SPI]);
+    sysbus_connect_irq(SYS_BUS_DEVICE(smmu), 3, pic[ASTRA_SL_SMMU_GERROR_SPI]);
+
+    /* TORQ device: model exposes only one IRQ, wired to the "job" line. Its
+     * DMA is routed through the SMMU for stream id ASTRA_SL_TORQ_STREAM_ID. */
+    torq = torq_create(ASTRA_SL_DEV_BASE, pic[ASTRA_SL_DEV_JOB_SPI]);
+    torq_set_dma_as(torq,
+                    smmu_get_platform_master_as(ARM_SMMU(smmu),
+                                                ASTRA_SL_TORQ_STREAM_ID));
 
     /* Virtio-mmio transport slot; backends are attached via -device
      * (e.g. -device virtio-blk-device,drive=...). */
