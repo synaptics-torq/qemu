@@ -1,0 +1,16 @@
+#!/bin/sh
+
+virtio_enabled() {
+    return 0
+}
+
+virtio_run() {
+   echo "Installing virtio modules..."
+   insmod lib/modules/6.12.62/kernel/drivers/virtio/virtio_mmio.ko 
+   insmod lib/modules/6.12.62/kernel/drivers/block/virtio_blk.ko 
+   
+   echo "Waiting for /dev/vda to appear..."
+   for i in $(seq 1 100); do [ -b /dev/vda ] && break; sleep 0.1; done    
+
+   echo "Drivers installed"
+}
