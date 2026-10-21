@@ -5,9 +5,14 @@ virtio_enabled() {
 }
 
 virtio_run() {
+   M=lib/modules/6.12.62/kernel
    echo "Installing virtio modules..."
-   insmod lib/modules/6.12.62/kernel/drivers/virtio/virtio_mmio.ko 
-   insmod lib/modules/6.12.62/kernel/drivers/block/virtio_blk.ko 
+   insmod $M/drivers/virtio/virtio_mmio.ko
+   insmod $M/drivers/block/virtio_blk.ko
+   insmod $M/net/core/failover.ko
+   insmod $M/drivers/net/net_failover.ko
+   insmod $M/lib/dim/dimlib.ko
+   insmod $M/drivers/net/virtio_net.ko
    
    echo "Waiting for /dev/vda to appear..."
    for i in $(seq 1 100); do [ -b /dev/vda ] && break; sleep 0.1; done    

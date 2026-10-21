@@ -29,4 +29,17 @@ using the Astra SL SDK image.
     ```bash
     ./run.sh
     ```
-    
+
+    An optional first argument is appended to the kernel command line.
+
+## Networking / SSH
+
+The guest gets a virtio network interface (`eth0`) backed by QEMU user-mode networking
+(slirp). The rootfs configures it via DHCP (`10.0.2.15`), and the guest's dropbear SSH
+server on port 22 is forwarded to `127.0.0.1:2222` on the host:
+
+```bash
+ssh -p 2222 root@127.0.0.1
+```
+
+Set `SSH_PORT` to use a different host port, e.g. `SSH_PORT=2223 ./run.sh`.

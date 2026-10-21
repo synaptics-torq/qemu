@@ -70,7 +70,8 @@
  */
 #define ASTRA_SL_VIRTIO_MMIO_BASE  0xf7880000
 #define ASTRA_SL_VIRTIO_MMIO_SIZE  0x1000
-#define ASTRA_SL_VIRTIO_MMIO_SPI   208  /* free SPI ID per sl2611.dtsi */
+#define ASTRA_SL_VIRTIO_MMIO_SPI   208  /* first of free SPIs 208.. per sl2611.dtsi */
+#define ASTRA_SL_VIRTIO_MMIO_NUM   2    /* e.g. one for blk, one for net */
 
 /* SPI input line indices (matching sl2611.dtsi) */
 #define ASTRA_SL_UART0_SPI       130  /* uart0 SPI ID 130 */
@@ -114,7 +115,6 @@ static void astra_sl_create_fdt(MachineState *machine, int smp_cpus)
     const char *uart_node = "/uart@e5030000";
     const char *synpu_node = "/synpu@f7600000";    
     const char *smmu_node = "/iommu@f7800000";
-    const char *virtio_node = "/virtio_mmio@f7880000";
     const char synpu_interrupt_names[] = "job\0fault";
     const char smmu_interrupt_names[] = "eventq\0priq\0gerror";
 
@@ -265,16 +265,23 @@ static void astra_sl_create_fdt(MachineState *machine, int smp_cpus)
     qemu_fdt_setprop_cell(astra_sl_fdt, smmu_node, "phandle", smmu_phandle);
     qemu_fdt_setprop_string(astra_sl_fdt, smmu_node, "status", "okay");
 
-    qemu_fdt_add_subnode(astra_sl_fdt, virtio_node);
-    qemu_fdt_setprop_string(astra_sl_fdt, virtio_node, "compatible",
-                            "virtio,mmio");
-    qemu_fdt_setprop_sized_cells(astra_sl_fdt, virtio_node, "reg",
-                                 2, ASTRA_SL_VIRTIO_MMIO_BASE,
-                                 2, ASTRA_SL_VIRTIO_MMIO_SIZE);
-    qemu_fdt_setprop_cells(astra_sl_fdt, virtio_node, "interrupts",
-                           GIC_FDT_IRQ_TYPE_SPI, ASTRA_SL_VIRTIO_MMIO_SPI,
-                           GIC_FDT_IRQ_FLAGS_EDGE_LO_HI);
-    qemu_fdt_setprop(astra_sl_fdt, virtio_node, "dma-coherent", NULL, 0);
+    for (int i = 0; i < ASTRA_SL_VIRTIO_MMIO_NUM; i++) {
+        hwaddr base = ASTRA_SL_VIRTIO_MMIO_BASE + i * ASTRA_SL_VIRTIO_MMIO_SIZE;
+        char *virtio_node = g_strdup_printf("/virtio_mmio@%" HWADDR_PRIx,
+                                            base);
+
+        qemu_fdt_add_subnode(astra_sl_fdt, virtio_node);
+        qemu_fdt_setprop_string(astra_sl_fdt, virtio_node, "compatible",
+                                "virtio,mmio");
+        qemu_fdt_setprop_sized_cells(astra_sl_fdt, virtio_node, "reg",
+                                     2, base, 2, ASTRA_SL_VIRTIO_MMIO_SIZE);
+        qemu_fdt_setprop_cells(astra_sl_fdt, virtio_node, "interrupts",
+                               GIC_FDT_IRQ_TYPE_SPI,
+                               ASTRA_SL_VIRTIO_MMIO_SPI + i,
+                               GIC_FDT_IRQ_FLAGS_EDGE_LO_HI);
+        qemu_fdt_setprop(astra_sl_fdt, virtio_node, "dma-coherent", NULL, 0);
+        g_free(virtio_node);
+    }
 }
 
 /*
@@ -419,8 +426,12 @@ static void astra_sl_init(MachineState *machine)
 
     /* Virtio-mmio transport slot; backends are attached via -device
      * (e.g. -device virtio-blk-device,drive=...). */
-    sysbus_create_simple("virtio-mmio", ASTRA_SL_VIRTIO_MMIO_BASE,
-                         pic[ASTRA_SL_VIRTIO_MMIO_SPI]);
+    for (i = 0; i < ASTRA_SL_VIRTIO_MMIO_NUM; i++) {
+        sysbus_create_simple("virtio-mmio",
+                             ASTRA_SL_VIRTIO_MMIO_BASE +
+                             i * ASTRA_SL_VIRTIO_MMIO_SIZE,
+                             pic[ASTRA_SL_VIRTIO_MMIO_SPI + i]);
+    }
 
     /* Boot */
     astra_sl_create_fdt(machine, smp_cpus);

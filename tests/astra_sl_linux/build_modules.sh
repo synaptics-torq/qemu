@@ -136,6 +136,8 @@ else
     # instead of failing on them. This is safe here because CONFIG_MODVERSIONS
     # is unset, so no symbol CRCs are verified at load time.
     VIRTIO_MODULES="drivers/net/virtio_net.ko drivers/block/virtio_blk.ko drivers/virtio/virtio_mmio.ko"
+    # virtio_net hard-depends on these (Kconfig selects them); not built into the SDK kernel
+    VIRTIO_MODULES="${VIRTIO_MODULES} net/core/failover.ko drivers/net/net_failover.ko lib/dim/dimlib.ko"
     make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KBUILD_MODPOST_WARN=1 ${VIRTIO_MODULES}
     # Package the built .ko modules plus the kernel release they were built
     # against
