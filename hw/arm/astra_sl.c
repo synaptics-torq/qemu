@@ -105,6 +105,9 @@ static void astra_sl_create_fdt(MachineState *machine, int smp_cpus)
     uint32_t clock_phandle;
     uint32_t gic_phandle;
     uint32_t smmu_phandle;
+    uint32_t npu_core_clk_phandle;
+    uint32_t syspll1_phandle;
+    uint32_t chip_ctrl_phandle;
     /* GICv2 PPI per-CPU mask bits covering all CPUs (GIC_CPU_MASK_SIMPLE(n)). */
     uint32_t timer_irqflags = deposit32(GIC_FDT_IRQ_FLAGS_LEVEL_HI,
                                         GIC_FDT_IRQ_PPI_CPU_START,
@@ -116,6 +119,9 @@ static void astra_sl_create_fdt(MachineState *machine, int smp_cpus)
     const char *synpu_node = "/synpu@f7600000";    
     const char *smmu_node = "/iommu@f7800000";
     const char synpu_interrupt_names[] = "job\0fault";
+    const char synpu_clock_names[] = "core\0clk_high\0clk_low";
+    const char synpu_reset_names[] = "core_rst";
+    const char syspll1_clock_names[] = "syspll1_low\0syspll1_high";
     const char smmu_interrupt_names[] = "eventq\0priq\0gerror";
 
     astra_sl_fdt = create_device_tree(&astra_sl_fdt_size);
@@ -223,6 +229,52 @@ static void astra_sl_create_fdt(MachineState *machine, int smp_cpus)
     qemu_fdt_setprop_string(astra_sl_fdt, "/chosen", "stdout-path", uart_node);
     qemu_fdt_setprop_string(astra_sl_fdt, "/aliases", "serial0", uart_node);
 
+    /* NPU clock providers. On the real board these come from the
+     * "syna,sl261x-clk" (&clk) and "syna,dolphin-pll" (&syspll1) overlay
+     * drivers, which are not loaded in the emulated guest; fixed clocks
+     * model them. Deliberately no OPP table: the driver's devfreq path
+     * then stays disabled, probe still succeeds and jobs can run. */
+    npu_core_clk_phandle = qemu_fdt_alloc_phandle(astra_sl_fdt);
+    qemu_fdt_add_subnode(astra_sl_fdt, "/npu-core-clk");
+    qemu_fdt_setprop_string(astra_sl_fdt, "/npu-core-clk", "compatible",
+                            "fixed-clock");
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/npu-core-clk", "#clock-cells", 0x0);
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/npu-core-clk", "clock-frequency",
+                          800000000);
+    qemu_fdt_setprop_string(astra_sl_fdt, "/npu-core-clk", "clock-output-names",
+                            "npucoreclk");
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/npu-core-clk", "phandle",
+                          npu_core_clk_phandle);
+
+    /* Two outputs selected by index (clk_high/clk_low), like the real
+     * &syspll1; without an OPP table the driver never switches between
+     * them, so equal rates are fine. */
+    syspll1_phandle = qemu_fdt_alloc_phandle(astra_sl_fdt);
+    qemu_fdt_add_subnode(astra_sl_fdt, "/syspll1");
+    qemu_fdt_setprop_string(astra_sl_fdt, "/syspll1", "compatible",
+                            "fixed-clock");
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/syspll1", "#clock-cells", 0x1);
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/syspll1", "clock-frequency",
+                          400000000);
+    qemu_fdt_setprop(astra_sl_fdt, "/syspll1", "clock-output-names",
+                     syspll1_clock_names, sizeof(syspll1_clock_names));
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/syspll1", "phandle", syspll1_phandle);
+
+    /* NPU reset provider, matched by the built-in
+     * "marvell,berlin4ct-chip-ctrl" reset driver (CONFIG_RESET_BERLIN=y).
+     * Its MMIO is unbacked in QEMU; the reads/writes it performs are
+     * harmless no-ops. */
+    chip_ctrl_phandle = qemu_fdt_alloc_phandle(astra_sl_fdt);
+    qemu_fdt_add_subnode(astra_sl_fdt, "/chip-control@f7e10000");
+    qemu_fdt_setprop_string(astra_sl_fdt, "/chip-control@f7e10000",
+                            "compatible", "marvell,berlin4ct-chip-ctrl");
+    qemu_fdt_setprop_sized_cells(astra_sl_fdt, "/chip-control@f7e10000",
+                                 "reg", 2, 0xf7e10000, 2, 0x400);
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/chip-control@f7e10000",
+                          "#reset-cells", 4);
+    qemu_fdt_setprop_cell(astra_sl_fdt, "/chip-control@f7e10000", "phandle",
+                          chip_ctrl_phandle);
+
     qemu_fdt_add_subnode(astra_sl_fdt, synpu_node);
     qemu_fdt_setprop_string(astra_sl_fdt, synpu_node, "compatible", "syna,npu");
     qemu_fdt_setprop_sized_cells(astra_sl_fdt, synpu_node, "reg",
@@ -237,13 +289,28 @@ static void astra_sl_create_fdt(MachineState *machine, int smp_cpus)
                            GIC_FDT_IRQ_FLAGS_LEVEL_HI);
     qemu_fdt_setprop(astra_sl_fdt, synpu_node, "interrupt-names",
                      synpu_interrupt_names, sizeof(synpu_interrupt_names));
+    /* Mirrors the real DTS: clocks = <&clk CLK_NPU>, <&syspll1 0>,
+     * <&syspll1 1>; clock-names = "core", "clk_high", "clk_low". */
+    qemu_fdt_setprop_cells(astra_sl_fdt, synpu_node, "clocks",
+                           npu_core_clk_phandle,
+                           syspll1_phandle, 0x0,
+                           syspll1_phandle, 0x1);
+    qemu_fdt_setprop(astra_sl_fdt, synpu_node, "clock-names",
+                     synpu_clock_names, sizeof(synpu_clock_names));
+    /* Mirrors the real DTS: resets = <&chip 0x378 1 1 0>. */
+    qemu_fdt_setprop_cells(astra_sl_fdt, synpu_node, "resets",
+                           chip_ctrl_phandle, 0x378, 1, 1, 0);
+    qemu_fdt_setprop(astra_sl_fdt, synpu_node, "reset-names",
+                     synpu_reset_names, sizeof(synpu_reset_names));
     /* NPU stream ids (matches the real NPU's iommus property). */
     qemu_fdt_setprop_cells(astra_sl_fdt, synpu_node, "iommus",
                            smmu_phandle, 0x1,
                            smmu_phandle, 0x2,
                            smmu_phandle, 0x3,
                            smmu_phandle, 0x4);
-    qemu_fdt_setprop_string(astra_sl_fdt, synpu_node, "status", "disabled");
+    /* Enabled, as the coralboard overlay does (&synpu { status = "okay"; }).
+     * Without this the kernel never instantiates the platform device. */
+    qemu_fdt_setprop_string(astra_sl_fdt, synpu_node, "status", "okay");
 
     /* SMMUv3 (ARM MMU-600), matching sl2611.dtsi "smmu: iommu@f7800000". */
     qemu_fdt_add_subnode(astra_sl_fdt, smmu_node);
