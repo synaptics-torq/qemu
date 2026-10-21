@@ -26,7 +26,7 @@ fi
 kernel_cmdline="console=ttyS0,115200 root=/dev/vda rootfstype=ext4 net.ifnames=0 ${1:-}"
 
 # disable unnecessary services and blacklist certain modules that are not emulated
-kernel_cmdline="$kernel_cmdline systemd.mask=tee-supplicant.service systemd.mask=android-tools-adbd.service systemd.mask=swupdate.service systemd.mask=ncm-gadget-setup.service systemd.mask=-brcm_bt_start.service module_blacklist=syna_drm,synadhd103,synadhd361,synadhd461,synadhd591,bcmdhd"
+kernel_cmdline="$kernel_cmdline systemd.mask=tee-supplicant.service systemd.mask=android-tools-adbd.service systemd.mask=brcm_bt_start.service systemd.mask=swupdate.service systemd.mask=ncm-gadget-setup.service systemd.mask=-brcm_bt_start.service module_blacklist=syna_drm,synadhd103,synadhd361,synadhd461,synadhd591,bcmdhd"
 
 echo "Starting Astra SL with the extracted kernel and initramfs (ssh: localhost:$SSH_PORT)..."
 
