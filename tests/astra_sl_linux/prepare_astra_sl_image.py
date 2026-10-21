@@ -16,12 +16,12 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-
 DOWNLOAD_URL = (
     "https://github.com/synaptics-astra/sdk/releases/download/"
-    "scarthgap_6.12_v2.4.0/"
-    "sl2619_coralboard_scarthgap_6.12_v2.4.0.zip"
+    "scarthgap_6.12_v2.6.1/"
+    "sl2619_coralboard_scarthgap_6.12_v2.6.1.zip"
 )
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 IMAGE_DIR = SCRIPT_DIR / "astra_sl_image"
 ZIP_PATH = IMAGE_DIR / "image.zip"
