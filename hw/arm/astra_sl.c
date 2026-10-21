@@ -366,9 +366,23 @@ static void astra_sl_init(MachineState *machine)
     sysbus_mmio_map(gicbusdev, 2, ASTRA_SL_GIC_HYP_BASE);
     sysbus_mmio_map(gicbusdev, 3, ASTRA_SL_GIC_VCPU_BASE);
 
-    /* Wire GIC outputs to each CPU's IRQ/FIQ inputs */
+    /* Wire CPU timers to GIC PPIs and GIC outputs to CPU IRQ/FIQ inputs. */
     for (i = 0; i < smp_cpus; i++) {
         DeviceState *cpudev = DEVICE(qemu_get_cpu(i));
+        int irq_base = ASTRA_SL_NUM_IRQS + i * GIC_INTERNAL;
+        const int timer_irq[] = {
+            [GTIMER_PHYS] = ARCH_TIMER_NS_EL1_IRQ,
+            [GTIMER_VIRT] = ARCH_TIMER_VIRT_IRQ,
+            [GTIMER_HYP] = ARCH_TIMER_NS_EL2_IRQ,
+            [GTIMER_SEC] = ARCH_TIMER_S_EL1_IRQ,
+        };
+
+        for (unsigned timer = 0; timer < ARRAY_SIZE(timer_irq); timer++) {
+            qdev_connect_gpio_out(cpudev, timer,
+                                  qdev_get_gpio_in(gicdev,
+                                                   irq_base + timer_irq[timer]));
+        }
+
         sysbus_connect_irq(gicbusdev, i,
                            qdev_get_gpio_in(cpudev, ARM_CPU_IRQ));
         sysbus_connect_irq(gicbusdev, i + smp_cpus,
