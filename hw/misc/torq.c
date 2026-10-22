@@ -28,9 +28,21 @@ static uint64_t torq_read(void *opaque, hwaddr addr, unsigned int size)
 {
     TORQState *s = TORQ(opaque);
     hwaddr cm_addr = addr >= s->mmio_base ? addr - s->mmio_base : addr;
-    uint32_t data = 0;
-    
-    torq_cm_read32(s->cm, cm_addr, &data);
+    uint64_t data = 0;
+
+    if (size == 8) {
+        uint32_t lo = 0, hi = 0;
+
+        /* The CM only speaks 32-bit accesses; split a 64-bit one. */
+        torq_cm_read32(s->cm, cm_addr, &lo);
+        torq_cm_read32(s->cm, cm_addr + 4, &hi);
+        data = lo | ((uint64_t)hi << 32);
+    } else {
+        uint32_t d32 = 0;
+
+        torq_cm_read32(s->cm, cm_addr, &d32);
+        data = d32;
+    }
     
     torq_update_irq(s);    
 
@@ -42,8 +54,17 @@ static void torq_write(void *opaque, hwaddr addr,
 {
     TORQState *s = TORQ(opaque);
     hwaddr cm_addr = addr >= s->mmio_base ? addr - s->mmio_base : addr;
-    uint32_t data = value;
-    torq_cm_write32(s->cm, cm_addr, &data);
+    uint32_t lo = value & 0xffffffff;
+
+    if (size == 8) {
+        uint32_t hi = value >> 32;
+
+        /* The CM only speaks 32-bit accesses; split a 64-bit one. */
+        torq_cm_write32(s->cm, cm_addr, &lo);
+        torq_cm_write32(s->cm, cm_addr + 4, &hi);
+    } else {
+        torq_cm_write32(s->cm, cm_addr, &lo);
+    }
     torq_update_irq(s);
 }
 
@@ -72,7 +93,7 @@ static const MemoryRegionOps torq_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
     .valid = {
         .min_access_size = 4,
-        .max_access_size = 4,
+        .max_access_size = 8,
     },
 };
 
