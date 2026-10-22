@@ -10,6 +10,7 @@
 #define HW_MISC_TORQ_H
 
 #include "hw/core/sysbus.h"
+#include "hw/misc/berlin_reset.h"
 #include "system/address-spaces.h"
 #include "qom/object.h"
 
@@ -35,6 +36,20 @@ struct TORQState {
 /* Set the address space used for the device's memory (DMA) accesses. */
 void torq_set_dma_as(DeviceState *dev, AddressSpace *as);
 
+/*
+ * NPU core reset line, per the DT "resets" property <&chip 0x378 1 1 0>:
+ * register offset 0x378, bit 1, sticky, active-low (assert = bit cleared).
+ */
+extern const BerlinResetSpec torq_core_rst;
+
+/*
+ * Reset-line callback for torq_core_rst: resets the C model when the line is
+ * asserted (@opaque must be a TORQState). The board registers it with
+ * berlin_chip_ctrl_add_reset_line().
+ */
+void torq_reset_line_cb(void *opaque, bool asserted);
+
+/* Create the TORQ device at addr on irq. */
 DeviceState *torq_create(hwaddr addr, qemu_irq irq);
 
 #endif

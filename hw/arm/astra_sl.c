@@ -33,6 +33,7 @@
 #include "hw/arm/smmuv3.h"
 #include "hw/arm/smmu-common.h"
 #include "hw/misc/torq.h"
+#include "hw/misc/berlin_reset.h"
 #include "hw/sd/sd.h"
 #include "hw/sd/sdhci.h"
 #include "target/arm/cpu.h"
@@ -72,6 +73,9 @@
 #define ASTRA_SL_VIRTIO_MMIO_SIZE  0x1000
 #define ASTRA_SL_VIRTIO_MMIO_SPI   208  /* first of free SPIs 208.. per sl2611.dtsi */
 #define ASTRA_SL_VIRTIO_MMIO_NUM   2    /* e.g. one for blk, one for net */
+
+/* NPU reset provider ("marvell,berlin4ct-chip-ctrl") per sl2611.dtsi "chip". */
+#define ASTRA_SL_CHIP_CTRL_BASE    0xf7e10000
 
 /* SPI input line indices (matching sl2611.dtsi) */
 #define ASTRA_SL_UART0_SPI       130  /* uart0 SPI ID 130 */
@@ -262,8 +266,9 @@ static void astra_sl_create_fdt(MachineState *machine, int smp_cpus)
 
     /* NPU reset provider, matched by the built-in
      * "marvell,berlin4ct-chip-ctrl" reset driver (CONFIG_RESET_BERLIN=y).
-     * Its MMIO is unbacked in QEMU; the reads/writes it performs are
-     * harmless no-ops. */
+     * Backed by the berlin-chip-ctrl device instantiated above
+     * (berlin_chip_ctrl_create); the NPU core reset (resets =
+     * <&chip 0x378 1 1 0>) fires the C model reset on the assert edge. */
     chip_ctrl_phandle = qemu_fdt_alloc_phandle(astra_sl_fdt);
     qemu_fdt_add_subnode(astra_sl_fdt, "/chip-control@f7e10000");
     qemu_fdt_setprop_string(astra_sl_fdt, "/chip-control@f7e10000",
@@ -399,6 +404,7 @@ static void astra_sl_init(MachineState *machine)
     int i;
     DeviceState *smmu;
     DeviceState *torq;
+    DeviceState *chip_ctrl;
 
     /* Number of CPUs to actually create (capped by the hardware maximum). */
     smp_cpus = MIN(machine->smp.cpus, ASTRA_SL_NUM_CPUS);
@@ -484,12 +490,22 @@ static void astra_sl_init(MachineState *machine)
     sysbus_connect_irq(SYS_BUS_DEVICE(smmu), 2, pic[ASTRA_SL_SMMU_SYNC_SPI]);
     sysbus_connect_irq(SYS_BUS_DEVICE(smmu), 3, pic[ASTRA_SL_SMMU_GERROR_SPI]);
 
+    /* "marvell,berlin4ct-chip-ctrl" NPU reset provider at
+     * ASTRA_SL_CHIP_CTRL_BASE; the kernel reset driver asserts/deasserts
+     * device resets through it. */
+    chip_ctrl = berlin_chip_ctrl_create(ASTRA_SL_CHIP_CTRL_BASE);
+
     /* TORQ device: model exposes only one IRQ, wired to the "job" line. Its
      * DMA is routed through the SMMU for stream id ASTRA_SL_TORQ_STREAM_ID. */
     torq = torq_create(ASTRA_SL_DEV_BASE, pic[ASTRA_SL_DEV_JOB_SPI]);
     torq_set_dma_as(torq,
                     smmu_get_platform_master_as(ARM_SMMU(smmu),
                                                 ASTRA_SL_TORQ_STREAM_ID));
+
+    /* Register the NPU core reset line (resets = <&chip 0x378 1 1 0>) on the
+     * chip-ctrl provider; the assert edge fires the TORQ C model reset. */
+    berlin_chip_ctrl_add_reset_line(chip_ctrl, &torq_core_rst, TORQ(torq),
+                                    torq_reset_line_cb);
 
     /* Virtio-mmio transport slot; backends are attached via -device
      * (e.g. -device virtio-blk-device,drive=...). */

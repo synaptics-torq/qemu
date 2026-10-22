@@ -8,6 +8,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/misc/torq.h"
+#include "hw/misc/berlin_reset.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
@@ -44,7 +45,7 @@ static uint64_t torq_read(void *opaque, hwaddr addr, unsigned int size)
         data = d32;
     }
     
-    torq_update_irq(s);    
+    torq_update_irq(s);
 
     return data;
 }
@@ -151,6 +152,31 @@ static void torq_register_types(void)
 }
 
 type_init(torq_register_types)
+
+/* Reset-line registration is done by the board (see torq_core_rst and
+ * torq_reset_line_cb in hw/misc/torq.h). */
+const BerlinResetSpec torq_core_rst = {
+    .offset = 0x378,
+    .bit = 1,
+    .inverted = false,
+};
+
+/*
+ * The guest asserts the NPU core reset by clearing the (active-low) bit,
+ * after which the kernel deasserts it and reprograms the NPU from scratch,
+ * so resetting the C model on the assert edge matches the hardware.
+ * @opaque must be a TORQState.
+ */
+void torq_reset_line_cb(void *opaque, bool asserted)
+{
+    TORQState *s = TORQ(opaque);
+
+    printf("TORQ reset line callback: asserted=%d\n", asserted);
+
+    if (asserted) {
+        torq_cm__reset(s->cm);
+    }
+}
 
 DeviceState *torq_create(hwaddr addr, qemu_irq irq)
 {
