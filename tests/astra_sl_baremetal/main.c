@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdint.h>
 
 #include "torq_reg_util.h"
@@ -15,6 +16,14 @@
 
 #define ASTRA_SL_GIC_DIST_BASE 0xf7e59000UL
 #define ASTRA_SL_GIC_CPU_BASE  0xf7e5a000UL
+
+/* NPU core reset line, per the DT "resets = <&chip 0x378 1 1 0>" property:
+ * chip-ctrl register offset 0x378, bit 1, sticky, active-low (bit set =
+ * deasserted). The berlin-chip-ctrl provider is emulated at CHIP_CTRL_BASE
+ * (see astra_sl.c). */
+#define CHIP_CTRL_BASE        0xf7e10000UL
+#define CHIP_CTRL_NPU_RST_REG (CHIP_CTRL_BASE + 0x378UL)
+#define CHIP_CTRL_NPU_RST_BIT (1u << 1)
 
 #define GICD_CTLR              0x000U
 #define GICD_ISENABLER         0x100U
@@ -201,8 +210,141 @@ void torq_enable_interrupts() {
 
 int torq_hw_end()
 {
-    torq_reg_write32(RA_(NSS,STATUS), 1);  // clear NSS status    
+    torq_reg_write32(RA_(NSS,STATUS), 1);  // clear NSS status
     return 0;
+}
+
+/*
+ * DMA test.
+ *
+ * DMA_NPU_PROGRAM is generated with the CT descriptor API (the same
+ * torq_api.c the compiler uses to emit NPU programs) -- see gen/gen_dma_program.c
+ * for the generator and synpu-hw/ct/app/example/torq_api_example_dma.c for the
+ * flow it follows. It configures a single DMA.XR transfer: 64 bytes from XRAM
+ * (guest RAM at DMA_XRAM_SRC, ARUSER=1 -> SMMU stream 0x1) into LRAM at
+ * DMA_LRAM_DST, then SYN-waits for the DMA.XR completion status.
+ * The program occupies LRAM words 0..17.
+ */
+#define DMA_XRAM_SRC   0x40010000u  // guest RAM (astra_sl: RAM at 0x40000000)
+#define DMA_LRAM_DST   0x40u        // LRAM destination (past the program)
+#define DMA_XFER_SIZE  64u
+
+#include "gen/dma_program.h"
+
+static void run_dma_test(void)
+{
+    volatile uint32_t *lram = (volatile uint32_t *)(TORQ_BASE_ADDR + REG_ADDR__TORQ_HV_LRAM);
+    volatile uint8_t *src = (volatile uint8_t *)(uintptr_t)DMA_XRAM_SRC;
+    size_t i;
+    int ok = 1;
+
+    uart_puts("DMA test: priming source buffer in RAM\n");
+    for (i = 0; i < DMA_XFER_SIZE; i++) {
+        src[i] = (uint8_t)(i * 8 + 1);
+    }
+
+    uart_puts("DMA test: loading NPU program into LRAM\n");
+
+    // load the generated NPU program into LRAM at 0
+    for (i = 0; i < sizeof(DMA_NPU_PROGRAM) / sizeof(DMA_NPU_PROGRAM[0]); i++) {
+        lram[i] = DMA_NPU_PROGRAM[i];
+    }
+
+    // the previous test's IRQ handler disabled the TORQ SPI
+    torq_irq_seen = 0;
+    gic_enable_spi_irq(TORQ_IRQ);
+
+    uart_puts("DMA test: starting NPU program (DMA.XR: RAM -> LRAM)\n");
+    torq_hw_start(0);
+    torq_hw_wait();
+
+    uint32_t status = torq_reg_read32(RA_(NSS, STATUS));
+    if (!RF_FMSK_RSH(NSS, STATUS_XR, status)) {
+        uart_puts("DMA test: FAIL (NSS.STATUS.xr not set)\n");
+        torq_hw_end();
+        return;
+    }
+
+    // verify LRAM contents match the source pattern
+    for (i = 0; i < DMA_XFER_SIZE / 4; i++) {
+        uint32_t want = 0;
+        for (int b = 0; b < 4; b++) {
+            want |= (uint32_t)((i * 4 + b) * 8 + 1) << (8 * b);
+        }
+        uint32_t got = lram[DMA_LRAM_DST / 4 + i];
+        if (got != want) {
+            uart_puts("DMA test: FAIL (LRAM data mismatch)\n");
+            ok = 0;
+            break;
+        }
+    }
+    if (ok) {
+        uart_puts("DMA test: PASS (64 bytes RAM -> LRAM)\n");
+    }
+
+    torq_hw_end();
+}
+
+/*
+ * NPU core reset test.
+ *
+ * Asserting the reset line (clearing the active-low bit) must reset the NPU
+ * C model: previously written NSS/CSS registers read back as 0. Deasserting
+ * (setting the bit) leaves the registers usable again.
+ */
+static void run_reset_test(void)
+{
+    uint32_t cfg = RF_LSH(NSS, CFG_LINK_EN, 1) | RF_BMSK_LSH(NSS, CFG_DESC, 0x123);
+    int ok = 1;
+
+    uart_puts("Reset test: writing NSS.CFG / CSS.IEN_HST markers\n");
+    torq_reg_write32(RA_(NSS, CFG), cfg);
+    if (torq_reg_read32(RA_(NSS, CFG)) != cfg) {
+        uart_puts("Reset test: FAIL (NSS.CFG marker readback)\n");
+        return;
+    }
+    torq_reg_write32(RA_(CSS, IEN_HST), RF_LSH(CSS, IEN_HST_NSS, 1));
+
+    if (!(mmio_read32(CHIP_CTRL_NPU_RST_REG) & CHIP_CTRL_NPU_RST_BIT)) {
+        uart_puts("Reset test: FAIL (reset line not deasserted initially)\n");
+        return;
+    }
+
+    uart_puts("Reset test: asserting NPU core reset (clearing bit 1)\n");
+    mmio_rmw32(CHIP_CTRL_NPU_RST_REG, CHIP_CTRL_NPU_RST_BIT, 0);
+    if (mmio_read32(CHIP_CTRL_NPU_RST_REG) & CHIP_CTRL_NPU_RST_BIT) {
+        uart_puts("Reset test: FAIL (bit still set after assert)\n");
+        ok = 0;
+    }
+
+    /* The assert edge must have reset the C model. */
+    if (torq_reg_read32(RA_(NSS, CFG)) != 0) {
+        uart_puts("Reset test: FAIL (NSS.CFG not cleared by reset)\n");
+        ok = 0;
+    }
+    if (torq_reg_read32(RA_(CSS, IEN_HST)) != 0) {
+        uart_puts("Reset test: FAIL (CSS.IEN_HST not cleared by reset)\n");
+        ok = 0;
+    }
+
+    uart_puts("Reset test: deasserting NPU core reset (setting bit 1)\n");
+    mmio_rmw32(CHIP_CTRL_NPU_RST_REG, CHIP_CTRL_NPU_RST_BIT,
+               CHIP_CTRL_NPU_RST_BIT);
+    if (!(mmio_read32(CHIP_CTRL_NPU_RST_REG) & CHIP_CTRL_NPU_RST_BIT)) {
+        uart_puts("Reset test: FAIL (bit not set after deassert)\n");
+        ok = 0;
+    }
+
+    /* The NPU registers must be usable again after the reset pulse. */
+    torq_reg_write32(RA_(NSS, CFG), cfg);
+    if (torq_reg_read32(RA_(NSS, CFG)) != cfg) {
+        uart_puts("Reset test: FAIL (NSS.CFG unusable after reset)\n");
+        ok = 0;
+    }
+
+    if (ok) {
+        uart_puts("Reset test: PASS (NPU core reset pulse works)\n");
+    }
 }
 
 void main(void)
@@ -245,6 +387,10 @@ void main(void)
 
     uart_puts("NPU program finished.\n");
     torq_hw_end();
+
+    run_dma_test();
+
+    run_reset_test();
 
     uart_puts("astra_sl bare-metal hello done\n");
 

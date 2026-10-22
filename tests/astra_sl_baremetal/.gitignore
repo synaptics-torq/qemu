@@ -1,3 +1,4 @@
 hello.elf
 hello.bin
 arm64
+gen_dma_program
