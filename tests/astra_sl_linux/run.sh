@@ -28,6 +28,38 @@ kernel_cmdline="console=ttyS0,115200 root=/dev/vda rootfstype=ext4 net.ifnames=0
 # disable unnecessary services and blacklist certain modules that are not emulated
 kernel_cmdline="$kernel_cmdline systemd.mask=tee-supplicant.service systemd.mask=android-tools-adbd.service systemd.mask=brcm_bt_start.service systemd.mask=swupdate.service systemd.mask=ncm-gadget-setup.service systemd.mask=-brcm_bt_start.service module_blacklist=syna_drm,synadhd103,synadhd361,synadhd461,synadhd591,bcmdhd"
 
+# to enable SMMU tracing add this to the QEMU command line
+#
+# -trace enable=smmuv3_translate_success \
+# -trace enable=smmuv3_translate_bypass \
+# -trace enable=smmuv3_translate_abort \
+# -trace enable=smmu_iotlb_insert \
+# -trace enable=smmu_iotlb_lookup_hit \
+# -trace enable=smmu_iotlb_lookup_miss \
+# -trace enable=smmu_iotlb_inv_all \
+# -trace enable=smmu_iotlb_inv_asid_vmid \
+# -trace enable=smmu_iotlb_inv_iova \
+# -trace enable=smmu_ptw_page_pte \
+# -trace enable=smmu_ptw_block_pte \
+# -trace enable=smmu_ptw_invalid_pte \
+# -trace enable=smmu_get_pte \
+# -trace enable=smmuv3_find_ste \
+# -trace enable=smmuv3_get_ste \
+# -trace enable=smmu_get_cd \
+# -trace enable=smmuv3_config_cache_hit \
+# -trace enable=smmuv3_config_cache_miss \
+# -trace enable=smmu_config_cache_inv \
+# -trace enable=smmuv3_range_inval \
+# -trace enable=smmuv3_cmdq_opcode \
+# -trace enable=smmuv3_cmdq_consume_error \
+# -trace enable=smmuv3_cmdq_cfgi_ste \
+# -trace enable=smmuv3_cmdq_cfgi_cd \
+# -trace enable=smmuv3_cmdq_tlbi_nh_asid \
+# -trace enable=smmuv3_cmdq_tlbi_nsnh \
+# -trace enable=smmuv3_cmdq_tlbi_nh \
+# -trace enable=smmuv3_propagate_event \
+# -trace enable=smmuv3_write_gerror \
+
 echo "Starting Astra SL with the extracted kernel and initramfs (ssh: localhost:$SSH_PORT)..."
 
 exec "$QEMU" \
