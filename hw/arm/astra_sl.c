@@ -66,6 +66,15 @@
 /* The single emulated TORQ master uses the first NPU stream id. */
 #define ASTRA_SL_TORQ_STREAM_ID    0x1
 
+/* Static DMA-BUF heap from sl261x-coralboard-common.dtsi
+ * ("syna,berlin-heaps"): an 8 MiB non-cacheable (NC) region at the top of
+ * the first memory bank. The guest kernel's berlin_heap driver registers
+ * it as the "NonSecure-NC" dma-heap, which the NPU stack allocates shared
+ * buffers from. Kept out of the guest /memory reg so it is not handed to
+ * the buddy allocator. */
+#define ASTRA_SL_NC_HEAP_BASE      0x7f800000ULL
+#define ASTRA_SL_NC_HEAP_SIZE      0x00800000ULL
+
 /* Free MMIO window in the sl2611.dtsi address map (between 0xf7800000 and
  * 0xf7a00000) used for the emulated virtio-mmio transport.
  */
@@ -151,6 +160,47 @@ static void astra_sl_create_fdt(MachineState *machine, int smp_cpus)
         qemu_guest_getrandom_nofail(rng_seed, sizeof(rng_seed));
         qemu_fdt_setprop(astra_sl_fdt, "/chosen", "rng-seed",
                          rng_seed, sizeof(rng_seed));
+    }
+
+    /* Memory layout mirrors the coralboard DTS: the guest sees RAM in the
+     * first bank but the top 8 MiB (ASTRA_SL_NC_HEAP) is the static
+     * "NonSecure-NC" dma-heap, excluded from /memory so the kernel does
+     * not hand it to the buddy allocator. */
+    {
+        hwaddr ram = machine->ram_size - ASTRA_SL_NC_HEAP_SIZE;
+
+        qemu_fdt_add_subnode(astra_sl_fdt, "/memory");
+        qemu_fdt_setprop_string(astra_sl_fdt, "/memory", "device_type",
+                                "memory");
+        qemu_fdt_setprop_sized_cells(astra_sl_fdt, "/memory", "reg",
+                                     2, 0x0, 2, ram);
+    }
+
+    /* Static DMA-BUF heap ("syna,berlin-heaps") from
+     * sl261x-coralboard-common.dtsi. pool-attributes encode the ion flags:
+     * attr[1] & ION_A_NC (0x0008) marks the pool non-cacheable, which the
+     * berlin_heap driver turns into DMA_ATTR_SKIP_CPU_SYNC. The attr words
+     * copy the coralboard DTS. Note pool-num is 1 here even though the
+     * coralboard DTS says 0: with 0 the driver's "for (i < heap_num)" loop
+     * never calls dma_heap_add() and no heap is registered. */
+    {
+        const uint32_t pool_attr[2] = { 0x00000105, 0x00000f3a };
+        const uint32_t heap_cell = 1;
+
+        qemu_fdt_add_subnode(astra_sl_fdt, "/dmabuf_heap");
+        qemu_fdt_setprop_string(astra_sl_fdt, "/dmabuf_heap", "compatible",
+                                "syna,berlin-heaps");
+        qemu_fdt_setprop_cell(astra_sl_fdt, "/dmabuf_heap", "pool-num",
+                              heap_cell);
+        qemu_fdt_setprop_string(astra_sl_fdt, "/dmabuf_heap", "reg-names",
+                                "NonSecure-NC");
+        qemu_fdt_setprop_sized_cells(astra_sl_fdt, "/dmabuf_heap", "reg",
+                                     2, ASTRA_SL_NC_HEAP_BASE,
+                                     2, ASTRA_SL_NC_HEAP_SIZE);
+        qemu_fdt_setprop_cell(astra_sl_fdt, "/dmabuf_heap",
+                              "attributes-num-per-pool", 2);
+        qemu_fdt_setprop(astra_sl_fdt, "/dmabuf_heap", "pool-attributes",
+                         pool_attr, sizeof(pool_attr));
     }
 
     clock_phandle = qemu_fdt_alloc_phandle(astra_sl_fdt);
