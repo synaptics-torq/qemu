@@ -94,6 +94,38 @@ def decompress_partition(name):
         raise
 
 
+ADBD_DROPIN_DIR = "/etc/systemd/system/android-tools-adbd.service.d"
+ADBD_DROPIN = """[Service]
+ExecStartPre=
+ExecStartPost=
+ExecStopPost=
+"""
+
+
+def configure_adbd_tcp(rootfs_image=None):
+    """Make adbd skip the USB gadget setup so it listens on TCP 5555 (no UDC in qemu)."""
+    rootfs_image = Path(rootfs_image or EMMC_DIR / "rootfs.subimg")
+    debugfs = shutil.which("debugfs")
+    if debugfs is None:
+        raise RuntimeError("debugfs is required to modify the ext4 rootfs")
+
+    title("Configuring adbd for TCP...")
+    target = f"{ADBD_DROPIN_DIR}/20-qemu-tcp.conf"
+    with tempfile.TemporaryDirectory() as tmp:
+        dropin = Path(tmp) / "20-qemu-tcp.conf"
+        dropin.write_text(ADBD_DROPIN, encoding="utf-8")
+        # mkdir/rm fail harmlessly when the directory exists / file is absent.
+        commands = Path(tmp) / "commands"
+        commands.write_text(
+            f"mkdir {ADBD_DROPIN_DIR}\nrm {target}\nwrite {dropin} {target}\n",
+            encoding="utf-8",
+        )
+        subprocess.run(
+            [debugfs, "-w", "-f", str(commands), str(rootfs_image)],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+
+
 def desparsify_boot_partition():
     boot_image = EMMC_DIR / "boot.subimg"
     raw_image = EMMC_DIR / "boot.raw"
@@ -329,6 +361,7 @@ def main():
     download_image()
     extract_image()
     decompress_partition("rootfs")
+    configure_adbd_tcp()
     decompress_partition("boot")
     desparsify_boot_partition()
     extract_kernel_image()

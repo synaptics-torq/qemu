@@ -43,3 +43,14 @@ ssh -p 2222 root@127.0.0.1
 ```
 
 Set `SSH_PORT` to use a different host port, e.g. `SSH_PORT=2223 ./run.sh`.
+
+## ADB
+
+There is no USB device controller in the emulated board, so `adbd` runs in TCP mode: 
+`prepare_astra_sl_image.py` adds a systemd drop-in to the rootfs that skips the USB gadget
+setup, and guest port 5555 is forwarded to `127.0.0.1:5555` on the host (`ADB_PORT` overrides it):
+
+```bash
+adb connect 127.0.0.1:5555
+adb shell
+```
