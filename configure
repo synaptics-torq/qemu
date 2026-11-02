@@ -654,6 +654,10 @@ for opt do
   ;;
   --with-torq-ext-lib=*) meson_option_add "-Dtorq_ext_lib=$optarg"
   ;;
+  --with-torq-mpact-sim-incdir=*) meson_option_add "-Dtorq_mpact_sim_incdir=$optarg"
+  ;;
+  --with-torq-mpact-sim-lib=*) meson_option_add "-Dtorq_mpact_sim_lib=$optarg"
+  ;;
   --cross-cc-*)
   ;;
   --cross-prefix-*)
@@ -874,6 +878,8 @@ Advanced options (experts only):
   --extra-ldflags=LDFLAGS  append extra linker flags LDFLAGS
   --with-torq-ext-incdir=DIR path to external TORQ header files
   --with-torq-ext-lib=LIB  external TORQ library (name or full path)
+  --with-torq-mpact-sim-incdir=DIR path to MPACT (CoralNPU) CSS simulator headers
+  --with-torq-mpact-sim-lib=LIB  path to MPACT (CoralNPU) CSS simulator library
   --cross-cc-ARCH=CC       use compiler when building ARCH guest test cases
   --cross-cc-cflags-ARCH=  use compiler flags when building ARCH guest tests
   --cross-prefix-ARCH=PREFIX cross compiler prefix when building ARCH guest test cases

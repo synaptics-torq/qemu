@@ -42,6 +42,10 @@ option('torq_ext_incdir', type: 'string', value: '',
        description: 'Path to external TORQ header files')
 option('torq_ext_lib', type: 'string', value: '',
        description: 'External TORQ library (library name or full path)')
+option('torq_mpact_sim_incdir', type: 'string', value: '',
+       description: 'Path to the MPACT (CoralNPU) CSS simulator headers')
+option('torq_mpact_sim_lib', type: 'string', value: '',
+       description: 'Path to the MPACT (CoralNPU) CSS simulator library')
 
 # Everything else can be set via --enable/--disable-* option
 # on the configure script command line.  After adding an option

@@ -16,6 +16,10 @@
 #include "system/address-spaces.h"
 #include "cm/torq_cm.h"
 
+#ifdef CONFIG_TORQ_MPACT
+#include "hw/misc/torq_mpact.h"
+#endif
+
 static void torq_update_irq(TORQState *s)
 {
     uint32_t irq = 0;
@@ -116,6 +120,13 @@ static void torq_init(Object *obj)
     }
 
     torq_cm__set_ext_mem_if(s->cm, s, torq_cm_read_mem, torq_cm_write_mem);
+
+#ifdef CONFIG_TORQ_MPACT
+    /* Run the CSS firmware on a real MPACT (CoralNPU) core. Without MPACT
+     * support the model keeps its built-in behavioral CSS CPU. */
+    torq_cm__set_css_cpu_code(s->cm, torq_mpact_run_cpu);
+#endif
+
     torq_update_irq(s);
 }
 

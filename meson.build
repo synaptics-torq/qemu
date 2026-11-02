@@ -81,7 +81,10 @@ python = import('python').find_installation()
 
 cc = meson.get_compiler('c')
 all_languages = ['c']
-enable_cpp = host_os == 'windows' or get_option('plugins')
+torq_mpact_sim_incdir = get_option('torq_mpact_sim_incdir')
+torq_mpact_sim_lib = get_option('torq_mpact_sim_lib')
+enable_cpp = host_os == 'windows' or get_option('plugins') or \
+  (torq_mpact_sim_incdir != '' and torq_mpact_sim_lib != '')
 if enable_cpp and add_languages('cpp', required: false, native: false)
   all_languages += ['cpp']
   cxx = meson.get_compiler('cpp')
@@ -3759,6 +3762,37 @@ if torq_ext_incdir != '' and  torq_ext_lib != ''
     include_directories: include_directories(torq_ext_incdir),
     link_args: [torq_ext_lib]
   )
+endif
+
+# MPACT (CoralNPU) CSS simulation. Requires the C model above plus the
+# external MPACT simulator shared library and its headers. When enabled the
+# CSS firmware is executed on a real MPACT RISC-V core instead of the
+# simplified behavioral model.
+torq_mpact_dep = declare_dependency()
+torq_mpact_enabled = false
+
+if torq_ext_incdir != '' and  torq_ext_lib != '' and \
+   torq_mpact_sim_incdir != '' and torq_mpact_sim_lib != ''
+  torq_mpact_enabled = true
+  # css_sw/common/css_sw_reg_inc.h pulls in the register headers unqualified,
+  # and the simulation source includes css_sw_inc.h unqualified, so the top of
+  # the torq-hw tree, its reg/ and css_sw/common/ subdirs are all needed.
+  torq_mpact_dep = declare_dependency(
+    include_directories: [
+      include_directories(torq_ext_incdir),
+      include_directories(torq_ext_incdir / 'reg'),
+      include_directories(torq_ext_incdir / 'css_sw' / 'common'),
+      include_directories(torq_mpact_sim_incdir),
+    ],
+    link_args: [torq_mpact_sim_lib, '-lstdc++'],
+    dependencies: [torq_dep],
+  )
+  if not ('cpp' in all_languages)
+    error('MPACT CSS simulation requires C++ support but the C++ compiler is not available')
+  endif
+  # Device CONFIG_* symbols don't reach the C preprocessor in this QEMU, so
+  # define CONFIG_TORQ_MPACT globally to guard the reference in hw/misc/torq.c.
+  add_project_arguments('-DCONFIG_TORQ_MPACT=1', native: false, language: 'c')
 endif
 
 # NOTE: the trace/ subdirectory needs the qapi_trace_events variable
