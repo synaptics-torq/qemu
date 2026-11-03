@@ -37,8 +37,8 @@ done
 
 # we reference commit ids so that we can ensure we don't need to change the reference
 # when we switch from pulling from private gerrit to public github.
-KERNEL_COMMIT=92a985854209a7cbdc54cca75f437850d1c255f5
-DRIVER_COMMIT=16f46a4d781eff4f0f467e3813e6ad28481419bd
+KERNEL_COMMIT=${KERNEL_COMMIT:-92a985854209a7cbdc54cca75f437850d1c255f5}
+DRIVER_COMMIT=${DRIVER_COMMIT:-16f46a4d781eff4f0f467e3813e6ad28481419bd}
 
 if [[ -n ${LINUX_KERNEL_SSH_KEY:-} ]]; then
   echo "Using provided SSH key for Linux kernel checkout."
