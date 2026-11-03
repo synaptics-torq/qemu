@@ -3784,7 +3784,7 @@ if torq_ext_incdir != '' and  torq_ext_lib != '' and \
       include_directories(torq_ext_incdir / 'css_sw' / 'common'),
       include_directories(torq_mpact_sim_incdir),
     ],
-    link_args: [torq_mpact_sim_lib, '-lstdc++'],
+    link_args: [torq_mpact_sim_lib, host_os == 'darwin' ? '-lc++' : '-lstdc++'],
     dependencies: [torq_dep],
   )
   if not ('cpp' in all_languages)
