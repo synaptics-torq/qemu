@@ -182,8 +182,6 @@ void torq_reset_line_cb(void *opaque, bool asserted)
 {
     TORQState *s = TORQ(opaque);
 
-    printf("TORQ reset line callback: asserted=%d\n", asserted);
-
     if (asserted) {
         torq_cm__reset(s->cm);
     }
