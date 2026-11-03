@@ -8,7 +8,15 @@ system_ss.add(when: 'CONFIG_IOMMU_TESTDEV', if_true: files('iommu-testdev.c'))
 system_ss.add(when: 'CONFIG_UNIMP', if_true: files('unimp.c'))
 system_ss.add(when: 'CONFIG_TORQ', if_true: files('torq.c', 'berlin_reset.c') + torq_dep)
 if torq_mpact_enabled
-  system_ss.add(files('torq_mpact.cpp') + torq_mpact_dep)
+  torq_mpact_lib = static_library('torq_mpact',
+    files('torq_mpact.cpp') + genh,
+    implicit_include_directories: false,
+    cpp_args: ['-DCONFIG_SOFTMMU', '-DCOMPILING_SYSTEM_VS_USER'],
+    dependencies: [glib, torq_mpact_dep],
+    build_by_default: false)
+  system_ss.add(declare_dependency(
+    objects: torq_mpact_lib.extract_all_objects(recursive: false),
+    dependencies: torq_mpact_dep))
 endif
 system_ss.add(when: 'CONFIG_EMPTY_SLOT', if_true: files('empty_slot.c'))
 system_ss.add(when: 'CONFIG_LED', if_true: files('led.c'))
