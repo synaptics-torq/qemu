@@ -2,7 +2,10 @@
 set -euo pipefail
 
 BASEDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-QEMU="$BASEDIR/../../build/qemu-system-aarch64"
+QEMU_BUILD_DIR="${QEMU_BUILD_DIR:-$BASEDIR/../../build}"
+QEMU="$QEMU_BUILD_DIR/qemu-system-aarch64"
+QEMU_RAM_SIZE="${QEMU_RAM_SIZE:-2G}"
+TORQ_BACKEND="${TORQ_BACKEND:-cmodel}"
 KERNEL="$BASEDIR/linux"
 INITRD="$BASEDIR/initramfs.cpio.gz"
 ROOTFS="$BASEDIR/astra_sl_image/eMMCimg/rootfs.subimg"
@@ -64,7 +67,10 @@ kernel_cmdline="$kernel_cmdline systemd.mask=tee-supplicant.service systemd.mask
 echo "Starting Astra SL with the extracted kernel and initramfs (ssh: localhost:$SSH_PORT, adb: localhost:$ADB_PORT)..."
 
 exec "$QEMU" \
-    -machine astra_sl \
+    -machine astra_sl,memory-backend=ram \
+    -m "$QEMU_RAM_SIZE" \
+    -object "memory-backend-memfd,id=ram,size=$QEMU_RAM_SIZE,share=on" \
+    -global "torq.backend=$TORQ_BACKEND" \
     -accel tcg \
     -initrd "$INITRD" \
     -kernel "$KERNEL" \

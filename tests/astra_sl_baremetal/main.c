@@ -193,7 +193,11 @@ void irq_handler(void)
 int torq_hw_wait()
 {
     while (!torq_irq_seen) {
-        torq_wfi();
+        __asm__ volatile ("msr daifset, #2" ::: "memory");
+        if (!torq_irq_seen) {
+            torq_wfi();
+        }
+        __asm__ volatile ("msr daifclr, #2" ::: "memory");
     }
 
     while (1) {
@@ -226,10 +230,13 @@ int torq_hw_end()
  * The program occupies LRAM words 0..17.
  */
 #define DMA_XRAM_SRC   0x40010000u  // guest RAM (astra_sl: RAM at 0x40000000)
-#define DMA_LRAM_DST   0x40u        // LRAM destination (past the program)
+#define DMA_LRAM_DST   0x100u       // LRAM destination (past the program)
 #define DMA_XFER_SIZE  64u
 
 #include "gen/dma_program.h"
+
+_Static_assert(sizeof(DMA_NPU_PROGRAM) <= DMA_LRAM_DST,
+               "DMA destination overlaps the NPU program");
 
 static void run_dma_test(void)
 {

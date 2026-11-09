@@ -79,6 +79,14 @@ meson_options_help() {
   printf "%s\n" '  --sysconfdir=VALUE       Sysconf data directory [etc]'
   printf "%s\n" '  --tls-priority=VALUE     Default TLS protocol/cipher priority string'
   printf "%s\n" '                           [NORMAL]'
+  printf "%s\n" '  --torq-ext-incdir=VALUE  Path to external TORQ header files'
+  printf "%s\n" '  --torq-ext-lib=VALUE     TORQ C-model library name or path'
+  printf "%s\n" '  --torq-fpga-incdir=VALUE AWS FPGA SDK include directory'
+  printf "%s\n" '  --torq-fpga-lib=VALUE    AWS FPGA management library path'
+  printf "%s\n" '  --torq-mpact-sim-incdir=VALUE'
+  printf "%s\n" '                           MPACT CSS simulator headers'
+  printf "%s\n" '  --torq-mpact-sim-lib=VALUE'
+  printf "%s\n" '                           MPACT CSS simulator library'
   printf "%s\n" '  --with-coroutine=CHOICE  coroutine backend to use (choices:'
   printf "%s\n" '                           auto/sigaltstack/ucontext/wasm/windows)'
   printf "%s\n" '  --with-pkgversion=VALUE  use specified string as sub-version of the'
@@ -520,6 +528,12 @@ _meson_option_parse() {
     --tls-priority=*) quote_sh "-Dtls_priority=$2" ;;
     --enable-tools) printf "%s" -Dtools=enabled ;;
     --disable-tools) printf "%s" -Dtools=disabled ;;
+    --torq-ext-incdir=*) quote_sh "-Dtorq_ext_incdir=$2" ;;
+    --torq-ext-lib=*) quote_sh "-Dtorq_ext_lib=$2" ;;
+    --torq-fpga-incdir=*) quote_sh "-Dtorq_fpga_incdir=$2" ;;
+    --torq-fpga-lib=*) quote_sh "-Dtorq_fpga_lib=$2" ;;
+    --torq-mpact-sim-incdir=*) quote_sh "-Dtorq_mpact_sim_incdir=$2" ;;
+    --torq-mpact-sim-lib=*) quote_sh "-Dtorq_mpact_sim_lib=$2" ;;
     --enable-tpm) printf "%s" -Dtpm=enabled ;;
     --disable-tpm) printf "%s" -Dtpm=disabled ;;
     --enable-trace-backends=*) quote_sh "-Dtrace_backends=$2" ;;

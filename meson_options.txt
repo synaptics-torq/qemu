@@ -41,11 +41,15 @@ option('gdb', type: 'string', value: '',
 option('torq_ext_incdir', type: 'string', value: '',
        description: 'Path to external TORQ header files')
 option('torq_ext_lib', type: 'string', value: '',
-       description: 'External TORQ library (library name or full path)')
+       description: 'TORQ C-model library name or path')
+option('torq_fpga_incdir', type: 'string', value: '',
+       description: 'AWS FPGA SDK include directory')
+option('torq_fpga_lib', type: 'string', value: '',
+       description: 'AWS FPGA management library path')
 option('torq_mpact_sim_incdir', type: 'string', value: '',
-       description: 'Path to the MPACT (CoralNPU) CSS simulator headers')
+       description: 'MPACT CSS simulator headers')
 option('torq_mpact_sim_lib', type: 'string', value: '',
-       description: 'Path to the MPACT (CoralNPU) CSS simulator library')
+       description: 'MPACT CSS simulator library')
 
 # Everything else can be set via --enable/--disable-* option
 # on the configure script command line.  After adding an option

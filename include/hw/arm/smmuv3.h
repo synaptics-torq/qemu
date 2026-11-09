@@ -25,6 +25,8 @@
 
 #define TYPE_SMMUV3_IOMMU_MEMORY_REGION "smmuv3-iommu-memory-region"
 
+GArray *smmuv3_snapshot(AddressSpace *as, uint64_t limit, Error **errp);
+
 typedef struct SMMUQueue {
      uint64_t base; /* base register */
      uint32_t prod;

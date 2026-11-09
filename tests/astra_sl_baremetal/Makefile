@@ -1,13 +1,14 @@
 CROSS ?= aarch64-linux-gnu-
 CC := $(CROSS)gcc
 OBJCOPY := $(CROSS)objcopy
+QEMU_BUILD_DIR ?= $(abspath ../../build)
 
 # check CDESC_DIR is set
 ifndef CDESC_DIR
 $(error CDESC_DIR is not set. Please set it to the directory containing the Torq headers)
 endif
 
-CFLAGS := -O2 -g -ffreestanding -fno-builtin -fno-stack-protector -Wall -Wextra -I$(CDESC_DIR) -I$(CDESC_DIR)/reg -I$(CDESC_DIR)/ct
+CFLAGS := -O2 -g -ffreestanding -fno-builtin -fno-stack-protector -mgeneral-regs-only -Wall -Wextra -I$(CDESC_DIR) -I$(CDESC_DIR)/reg -I$(CDESC_DIR)/ct
 LDFLAGS := -nostdlib -Wl,--build-id=none -T linker.ld
 
 all: hello.elf hello.bin
@@ -21,14 +22,8 @@ hello.bin: hello.elf
 clean:
 	rm -f hello.elf hello.bin
 
-run: hello.elf
-	cd ../../build && ./qemu-system-aarch64 \
-		-machine astra_sl \
-		-accel tcg \
-		-display none \
-		-monitor none \
-		-serial stdio \
-		-kernel ../tests/astra_sl_baremetal/hello.elf
+run:
+	QEMU_BUILD_DIR="$(QEMU_BUILD_DIR)" ./run.sh "$(CDESC_DIR)"
 
 .PHONY: gen clean run
 

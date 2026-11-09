@@ -38,7 +38,7 @@ int torq_desc_dump__data(void *self, int job_id, int stg_id, int tsk_id,
 }
 
 #define XRAM_SRC  0x40010000u // guest RAM (astra_sl: RAM at 0x40000000, kernel+stack live just below)
-#define LRAM_DST  0x40u      // LRAM words 16..31; program occupies words 0..17
+#define LRAM_DST  0x100u     // Keep the DMA output beyond the NPU program.
 #define DMA_SIZE  64u
 
 int main(void)

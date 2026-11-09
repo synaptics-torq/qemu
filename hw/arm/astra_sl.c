@@ -540,10 +540,10 @@ static void astra_sl_init(MachineState *machine)
 
     /* TORQ device: model exposes only one IRQ, wired to the "job" line. Its
      * DMA is routed through the SMMU for stream id ASTRA_SL_TORQ_STREAM_ID. */
-    torq = torq_create(ASTRA_SL_DEV_BASE, pic[ASTRA_SL_DEV_JOB_SPI]);
-    torq_set_dma_as(torq,
-                    smmu_get_platform_master_as(ARM_SMMU(smmu),
-                                                ASTRA_SL_TORQ_STREAM_ID));
+    torq = torq_create(ASTRA_SL_DEV_BASE, pic[ASTRA_SL_DEV_JOB_SPI],
+                       smmu_get_platform_master_as(ARM_SMMU(smmu),
+                                                   ASTRA_SL_TORQ_STREAM_ID),
+                       machine->ram);
 
     /* Register the NPU core reset line (resets = <&chip 0x378 1 1 0>) on the
      * chip-ctrl provider; the assert edge fires the TORQ C model reset. */

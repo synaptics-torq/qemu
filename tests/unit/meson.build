@@ -60,6 +60,17 @@ if have_system or have_tools
   endif
 endif
 
+if host_os == 'linux'
+  tests += {'test-torq-protocol': ['../../hw/misc/torq-protocol.c']}
+  if is_variable('torq_server')
+    tests += {'test-torq-memory': ['../../hw/misc/torq-protocol.c', torq_dep]}
+    test('test-torq-server', python,
+      args: [files('test-torq-server.py'), torq_server],
+      timeout: 60,
+      suite: ['unit'])
+  endif
+endif
+
 if have_block
   tests += {
     'test-coroutine': [testblock],

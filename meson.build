@@ -3790,9 +3790,6 @@ if torq_ext_incdir != '' and  torq_ext_lib != '' and \
   if not ('cpp' in all_languages)
     error('MPACT CSS simulation requires C++ support but the C++ compiler is not available')
   endif
-  # Device CONFIG_* symbols don't reach the C preprocessor in this QEMU, so
-  # define CONFIG_TORQ_MPACT globally to guard the reference in hw/misc/torq.c.
-  add_project_arguments('-DCONFIG_TORQ_MPACT=1', native: false, language: 'c')
 endif
 
 # NOTE: the trace/ subdirectory needs the qapi_trace_events variable

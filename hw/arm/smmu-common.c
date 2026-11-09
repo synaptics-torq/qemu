@@ -487,6 +487,7 @@ static int smmu_ptw_64_s1(SMMUState *bs, SMMUTransCfg *cfg,
         dma_addr_t pte_addr = baseaddr + offset * sizeof(pte);
         uint8_t ap;
 
+        tlbe->entry.addr_mask = mask;
         if (get_pte(baseaddr, offset, &pte, info)) {
                 goto error;
         }

@@ -926,6 +926,100 @@ static SMMUTransCfg *smmuv3_get_config(SMMUDevice *sdev, SMMUEventInfo *event)
     return cfg;
 }
 
+GArray *smmuv3_snapshot(AddressSpace *as, uint64_t limit, Error **errp)
+{
+    GArray *entries = g_array_new(false, false, sizeof(IOMMUTLBEntry));
+    SMMUDevice *sdev;
+    SMMUv3State *s;
+    SMMUTransCfg *cfg;
+    SMMUEventInfo event = { .type = SMMU_EVT_NONE };
+
+    if (!object_dynamic_cast(OBJECT(as->root),
+                             TYPE_SMMUV3_IOMMU_MEMORY_REGION) ||
+        !limit || limit > (UINT64_C(1) << 32)) {
+        error_setg(errp, "TORQ requires a bounded 32-bit SMMUv3 address space");
+        g_array_unref(entries);
+        return NULL;
+    }
+    sdev = container_of(IOMMU_MEMORY_REGION(as->root), SMMUDevice, iommu);
+    s = sdev->smmu;
+    qemu_mutex_lock(&s->mutex);
+    if (!smmu_enabled(s)) {
+        if (FIELD_EX32(s->gbpa, GBPA, ABORT)) {
+            goto done;
+        }
+        goto bypass;
+    }
+    cfg = smmuv3_get_config(sdev, &event);
+    if (!cfg) {
+        error_setg(errp, "TORQ cannot decode SMMUv3 stream configuration");
+        goto fail;
+    }
+    if (cfg->aborted) {
+        goto done;
+    }
+    if (cfg->bypassed) {
+        goto bypass;
+    }
+    if (cfg->stage != SMMU_STAGE_1 || !cfg->aa64) {
+        error_setg(errp,
+               "TORQ snapshots support AArch64 stage-1 translation only");
+        goto fail;
+    }
+    for (uint64_t address = 0; address < limit;) {
+        SMMUTLBEntry translated = { .entry.addr_mask = 4095 };
+        SMMUTLBEntry writable = { 0 };
+        SMMUPTWEventInfo info = { 0 };
+        int status = smmu_ptw(ARM_SMMU(s), cfg, address, IOMMU_RO,
+                              &translated, &info);
+        uint64_t step = MIN(limit - address,
+                            translated.entry.addr_mask -
+                            (address & translated.entry.addr_mask) + 1);
+
+        if (!status) {
+            IOMMUTLBEntry entry = {
+                .target_as = &address_space_memory,
+                .iova = address,
+                .translated_addr = CACHED_ENTRY_TO_ADDR(&translated, address),
+                .addr_mask = step - 1,
+                .perm = IOMMU_RO,
+            };
+            if (!smmu_ptw(ARM_SMMU(s), cfg, address, IOMMU_WO,
+                           &writable, &info)) {
+                entry.perm |= IOMMU_WO;
+            }
+            g_array_append_val(entries, entry);
+        } else if (info.type != SMMU_PTW_ERR_TRANSLATION &&
+                   info.type != SMMU_PTW_ERR_PERMISSION &&
+                   info.type != SMMU_PTW_ERR_ACCESS) {
+            error_setg(errp,
+                       "TORQ page-table snapshot failed at IOVA 0x%"PRIx64,
+                       address);
+            goto fail;
+        }
+        address += step;
+    }
+done:
+    qemu_mutex_unlock(&s->mutex);
+    return entries;
+
+bypass:
+    {
+        IOMMUTLBEntry entry = {
+            .target_as = &address_space_memory,
+            .addr_mask = limit - 1,
+            .perm = IOMMU_RW,
+        };
+        g_array_append_val(entries, entry);
+    }
+    goto done;
+
+fail:
+    qemu_mutex_unlock(&s->mutex);
+    g_array_unref(entries);
+    return NULL;
+}
+
 static void smmuv3_flush_config(SMMUDevice *sdev)
 {
     SMMUv3State *s = sdev->smmu;

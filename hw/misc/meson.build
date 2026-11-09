@@ -6,7 +6,9 @@ system_ss.add(when: 'CONFIG_ISA_TESTDEV', if_true: files('pc-testdev.c'))
 system_ss.add(when: 'CONFIG_PCI_TESTDEV', if_true: files('pci-testdev.c'))
 system_ss.add(when: 'CONFIG_IOMMU_TESTDEV', if_true: files('iommu-testdev.c'))
 system_ss.add(when: 'CONFIG_UNIMP', if_true: files('unimp.c'))
-system_ss.add(when: 'CONFIG_TORQ', if_true: files('torq.c', 'berlin_reset.c') + torq_dep)
+system_ss.add(when: 'CONFIG_TORQ', if_true: files('torq.c', 'torq-protocol.c', 'berlin_reset.c'))
+torq_server_sources = files('torq-server.c', 'torq-protocol.c')
+torq_server_dependencies = [torq_dep]
 if torq_mpact_enabled
   torq_mpact_lib = static_library('torq_mpact',
     files('torq_mpact.cpp') + genh,
@@ -14,9 +16,28 @@ if torq_mpact_enabled
     cpp_args: ['-DCONFIG_SOFTMMU', '-DCOMPILING_SYSTEM_VS_USER'],
     dependencies: [glib, torq_mpact_dep],
     build_by_default: false)
-  system_ss.add(declare_dependency(
+  torq_server_dependencies += declare_dependency(
     objects: torq_mpact_lib.extract_all_objects(recursive: false),
-    dependencies: torq_mpact_dep))
+    dependencies: torq_mpact_dep)
+endif
+if host_os == 'linux' and torq_ext_incdir != '' and torq_ext_lib != ''
+  torq_server_args = []
+  if torq_mpact_enabled
+    torq_server_args += ['-DCONFIG_TORQ_MPACT=1']
+  endif
+  if get_option('torq_fpga_incdir') != '' and get_option('torq_fpga_lib') != ''
+    torq_server_sources += files('torq-fpga.c')
+    torq_server_args += ['-DCONFIG_TORQ_AWS_FPGA=1']
+    torq_server_dependencies += declare_dependency(
+      include_directories: include_directories(get_option('torq_fpga_incdir')),
+      link_args: [get_option('torq_fpga_lib')])
+  endif
+  torq_server = executable('torq-cmodel-server', torq_server_sources,
+    dependencies: torq_server_dependencies,
+    c_args: torq_server_args,
+    link_args: ['-lm'],
+    install: true,
+    install_dir: get_option('bindir'))
 endif
 system_ss.add(when: 'CONFIG_EMPTY_SLOT', if_true: files('empty_slot.c'))
 system_ss.add(when: 'CONFIG_LED', if_true: files('led.c'))
