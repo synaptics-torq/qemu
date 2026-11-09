@@ -1,7 +1,7 @@
 /*
  * TORQ MPACT CSS simulation
  *
- * Copyright (c) 2026 QEMU Contributors
+ * Copyright (c) 2026 Synaptics Inc.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
