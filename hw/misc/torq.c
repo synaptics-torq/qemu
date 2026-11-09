@@ -413,6 +413,7 @@ static void torq_realize(DeviceState *dev, Error **errp)
     TorqMessage hello;
     g_autofree char *default_path = NULL;
     g_autofree char *directory = NULL;
+    g_auto(GStrv) environment = g_get_environ();
     struct timeval timeout = {
         .tv_sec = s->timeout_ms / 1000,
         .tv_usec = (s->timeout_ms % 1000) * 1000,
@@ -459,7 +460,7 @@ static void torq_realize(DeviceState *dev, Error **errp)
     posix_spawn_file_actions_init(&actions);
     posix_spawn_file_actions_adddup2(&actions, sockets[1], 3);
     status = posix_spawn(&s->server_pid, path, &actions, NULL,
-                          arguments, environ);
+                          arguments, environment);
     posix_spawn_file_actions_destroy(&actions);
     close(sockets[1]);
     if (status) {
