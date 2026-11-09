@@ -412,7 +412,6 @@ static void torq_realize(DeviceState *dev, Error **errp)
     int status;
     TorqMessage hello;
     g_autofree char *default_path = NULL;
-    g_autofree char *executable = NULL;
     g_autofree char *directory = NULL;
     struct timeval timeout = {
         .tv_sec = s->timeout_ms / 1000,
@@ -432,21 +431,18 @@ static void torq_realize(DeviceState *dev, Error **errp)
         error_setg(errp, "TORQ requires SMMUv3 DMA and a nonzero timeout-ms");
         return;
     }
-    if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets)) {
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets)) {
         error_setg_errno(errp, errno, "TORQ socketpair failed");
         return;
     }
+    qemu_set_cloexec(sockets[0]);
+    qemu_set_cloexec(sockets[1]);
     s->socket_fd = sockets[0];
     setsockopt(s->socket_fd, SOL_SOCKET, SO_RCVTIMEO,
                 &timeout, sizeof(timeout));
     setsockopt(s->socket_fd, SOL_SOCKET, SO_SNDTIMEO,
                 &timeout, sizeof(timeout));
-    executable = g_file_read_link("/proc/self/exe", NULL);
-    if (!executable) {
-        error_setg_errno(errp, errno, "Cannot locate the QEMU executable");
-        goto fail;
-    }
-    directory = g_path_get_dirname(executable);
+    directory = get_relocated_path(CONFIG_BINDIR);
     default_path = g_build_filename(directory, "torq-cmodel-server", NULL);
     if (!s->server_path && access(default_path, X_OK)) {
         g_free(default_path);

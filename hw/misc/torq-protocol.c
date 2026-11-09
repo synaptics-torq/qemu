@@ -1,10 +1,19 @@
 #include "hw/misc/torq-protocol.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
+
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+#ifndef MSG_CMSG_CLOEXEC
+#define MSG_CMSG_CLOEXEC 0
+#endif
 
 static int transfer(int socket_fd, void *buffer, size_t size, int sending)
 {
@@ -95,6 +104,9 @@ int torq_message_receive(int socket_fd, TorqMessage *message,
                        index * sizeof(int), sizeof(received_fd));
                 if (*shared_fd < 0) {
                     *shared_fd = received_fd;
+                    if (fcntl(received_fd, F_SETFD, FD_CLOEXEC) < 0) {
+                        malformed = 1;
+                    }
                 } else {
                     close(received_fd);
                     malformed = 1;

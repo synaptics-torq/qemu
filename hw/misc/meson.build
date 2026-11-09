@@ -20,12 +20,12 @@ if torq_mpact_enabled
     objects: torq_mpact_lib.extract_all_objects(recursive: false),
     dependencies: torq_mpact_dep)
 endif
-if host_os == 'linux' and torq_ext_incdir != '' and torq_ext_lib != ''
+if host_os in ['linux', 'darwin'] and torq_ext_incdir != '' and torq_ext_lib != ''
   torq_server_args = []
   if torq_mpact_enabled
     torq_server_args += ['-DCONFIG_TORQ_MPACT=1']
   endif
-  if get_option('torq_fpga_incdir') != '' and get_option('torq_fpga_lib') != ''
+  if host_os == 'linux' and get_option('torq_fpga_incdir') != '' and get_option('torq_fpga_lib') != ''
     torq_server_sources += files('torq-fpga.c')
     torq_server_args += ['-DCONFIG_TORQ_AWS_FPGA=1']
     torq_server_dependencies += declare_dependency(

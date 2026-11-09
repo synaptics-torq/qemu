@@ -7,6 +7,7 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import unittest
 
 
@@ -28,7 +29,8 @@ class TorqServerTest(unittest.TestCase):
         self.events = []
         self.sequence = 0
         self.assertEqual(self.receive()[0][:2], (1, 0))
-        self.fd = os.memfd_create("torq-test")
+        self.shared_file = tempfile.TemporaryFile()
+        self.fd = self.shared_file.fileno()
         os.ftruncate(self.fd, 8192)
         self.memory = mmap.mmap(self.fd, 8192)
         self.request(2, payload=struct.pack("<QQ", 8192, 0), fd=self.fd)
@@ -41,7 +43,7 @@ class TorqServerTest(unittest.TestCase):
             self.child.kill()
             self.child.wait()
         self.memory.close()
-        os.close(self.fd)
+        self.shared_file.close()
 
     def receive(self):
         contents = bytearray()

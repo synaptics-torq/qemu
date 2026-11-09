@@ -11,7 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#ifdef __linux__
 #include <sys/prctl.h>
+#endif
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -428,10 +430,13 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
     server.socket_fd = socket_fd;
+    signal(SIGPIPE, SIG_IGN);
     pid_t parent = getppid();
+#ifdef __linux__
     if (prctl(PR_SET_PDEATHSIG, SIGTERM) || getppid() != parent) {
         return EXIT_FAILURE;
     }
+#endif
     server.xram = mmap(NULL, TORQ_IOVA_LIMIT, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (server.xram == MAP_FAILED) {
@@ -477,7 +482,10 @@ int main(int argc, char **argv)
             }
         }
         struct pollfd descriptor = { .fd = server.socket_fd, .events = POLLIN };
-        int ready = poll(&descriptor, 1, server.progress ? 1 : -1);
+        int ready = poll(&descriptor, 1, server.progress ? 1 : 1000);
+        if (getppid() != parent) {
+            break;
+        }
         if (ready < 0 && errno == EINTR) {
             continue;
         }
