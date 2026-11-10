@@ -1,7 +1,8 @@
 /*
  * Copyright (C) 2014-2016 Broadcom Corporation
  * Copyright (c) 2017 Red Hat, Inc.
- * Written by Prem Mallappa, Eric Auger
+ * Copyright (c) 2026 Synaptics Inc.
+ * Written by Prem Mallappa, Eric Auger with contributions from Synaptics Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as

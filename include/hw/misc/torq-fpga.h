@@ -1,3 +1,9 @@
+// Copyright 2026 Synaptics Inc.
+//
+// Licensed under the Apache License v2.0
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0
+
 #ifndef HW_MISC_TORQ_FPGA_H
 #define HW_MISC_TORQ_FPGA_H
 

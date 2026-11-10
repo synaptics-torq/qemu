@@ -1,3 +1,10 @@
+// Copyright 2026 Synaptics Inc.
+//
+// Licensed under the Apache License v2.0
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0
+
+
 // Host-side generator for the bare-metal DMA test.
 //
 // Uses the CT descriptor-generation API (synpu-hw/ct/desc_gen) — the same

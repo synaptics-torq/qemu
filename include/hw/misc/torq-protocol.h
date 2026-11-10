@@ -1,3 +1,8 @@
+// Copyright 2026 Synaptics Inc.
+//
+// SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
+
+
 #ifndef HW_MISC_TORQ_PROTOCOL_H
 #define HW_MISC_TORQ_PROTOCOL_H
 

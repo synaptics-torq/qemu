@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+# Copyright 2026 Synaptics Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import array
 import mmap
 import os

@@ -1,3 +1,8 @@
+
+// Copyright 2026 Synaptics Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "hw/misc/torq-protocol.h"
 
 #include <assert.h>

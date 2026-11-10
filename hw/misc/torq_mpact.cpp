@@ -1,10 +1,8 @@
-/*
- * TORQ MPACT CSS simulation
- *
- * Copyright (c) 2026 QEMU Contributors
- *
- * SPDX-License-Identifier: GPL-2.0-or-later
- */
+// Copyright 2026 Synaptics Inc.
+//
+// Licensed under the Apache License v2.0
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0
 
 /*
  * Runs the CSS (Compute Sub-System) firmware on the MPACT (CoralNPU)
@@ -19,7 +17,6 @@
  * 
  */
 
-#include "qemu/osdep.h"
 #include "hw/misc/torq_mpact.h"
 
 /* The CSS model tags memory accesses with multichar constants (e.g. 'CCPU');

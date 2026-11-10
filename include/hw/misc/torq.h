@@ -1,5 +1,5 @@
 /*
- * TORQ placeholder device
+ * TORQ device
  *
  * Copyright (c) 2026 Synaptics Inc.
  *
