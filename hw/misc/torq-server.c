@@ -391,6 +391,11 @@ static int process(TorqServer *server, TorqMessage *message, void **payload,
             advance(server)) {
             return -1;
         }
+        /* Run the C model to completion before replying so the guest's timeout starts after the job. */
+        if (!reply.status && server->model && torq_execution_write(address, value) &&
+            advance(server)) {
+            return -1;
+        }
         break;
     case TORQ_MSG_RESET:
         reply.status = backend_reset(server);

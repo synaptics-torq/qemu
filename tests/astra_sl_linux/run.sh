@@ -6,6 +6,8 @@ QEMU_BUILD_DIR="${QEMU_BUILD_DIR:-$BASEDIR/../../build}"
 QEMU="$QEMU_BUILD_DIR/qemu-system-aarch64"
 QEMU_RAM_SIZE="${QEMU_RAM_SIZE:-2G}"
 TORQ_BACKEND="${TORQ_BACKEND:-cmodel}"
+# Virtual time only advances with executed instructions, so a blocking C-model job doesn't trip guest timeouts; set empty to disable
+QEMU_ICOUNT="${QEMU_ICOUNT-shift=0,sleep=on}"
 KERNEL="$BASEDIR/linux"
 INITRD="$BASEDIR/initramfs.cpio.gz"
 ROOTFS="$BASEDIR/astra_sl_image/eMMCimg/rootfs.subimg"
@@ -64,6 +66,11 @@ kernel_cmdline="$kernel_cmdline systemd.mask=tee-supplicant.service systemd.mask
 # -trace enable=smmuv3_propagate_event \
 # -trace enable=smmuv3_write_gerror \
 
+icount_args=()
+if [[ -n "$QEMU_ICOUNT" ]]; then
+    icount_args=(-icount "$QEMU_ICOUNT")
+fi
+
 echo "Starting Astra SL with the extracted kernel and initramfs (ssh: localhost:$SSH_PORT, adb: localhost:$ADB_PORT)..."
 
 exec "$QEMU" \
@@ -72,6 +79,7 @@ exec "$QEMU" \
     -object "memory-backend-memfd,id=ram,size=$QEMU_RAM_SIZE,share=on" \
     -global "torq.backend=$TORQ_BACKEND" \
     -accel tcg \
+    ${icount_args[@]+"${icount_args[@]}"} \
     -initrd "$INITRD" \
     -kernel "$KERNEL" \
     -drive file="$ROOTFS",if=none,id=rootfs,format=raw,snapshot=on \
