@@ -386,6 +386,11 @@ static int process(TorqServer *server, TorqMessage *message, void **payload,
             server->results_pending = true;
         }
         server->progress = server->prepared;
+        /* Lower the IRQ before the reply, else the guest re-enters its handler on a stale level. */
+        if (!reply.status && address == TORQ_NSS_STATUS && server->prepared &&
+            advance(server)) {
+            return -1;
+        }
         break;
     case TORQ_MSG_RESET:
         reply.status = backend_reset(server);
