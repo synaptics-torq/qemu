@@ -492,11 +492,11 @@ static bool torq_connect(TORQState *s, Error **errp)
     setsockopt(s->socket_fd, SOL_SOCKET, SO_SNDTIMEO,
                 &timeout, sizeof(timeout));
     directory = get_relocated_path(CONFIG_BINDIR);
-    default_path = g_build_filename(directory, "torq-cmodel-server", NULL);
+    default_path = g_build_filename(directory, "torq-device-model-server", NULL);
     if (!s->server_path && access(default_path, X_OK)) {
         g_free(default_path);
         default_path = g_build_filename(directory, "hw", "misc",
-                                         "torq-cmodel-server", NULL);
+                                         "torq-device-model-server", NULL);
     }
     const char *path = s->server_path ? s->server_path : default_path;
     char fd_option[] = "--fd";

@@ -32,7 +32,7 @@ if host_os in ['linux', 'darwin'] and torq_ext_incdir != '' and torq_ext_lib != 
       include_directories: include_directories(get_option('torq_fpga_incdir')),
       link_args: [get_option('torq_fpga_lib')])
   endif
-  torq_server = executable('torq-cmodel-server', torq_server_sources,
+  torq_server = executable('torq-device-model-server', torq_server_sources,
     dependencies: torq_server_dependencies,
     c_args: torq_server_args,
     link_args: ['-lm'],

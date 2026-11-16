@@ -1,7 +1,7 @@
 Synaptics Astra SL (``astra_sl``)
 ================================
 
-The TORQ device runs its backend in a separate ``torq-cmodel-server``
+The TORQ device runs its backend in a separate ``torq-device-model-server``
 process. QEMU retains the guest register aperture, SMMUv3 translation,
 and interrupt line. The server owns the C model, optional MPACT CSS
 simulator, or optional AWS FPGA backend.
@@ -13,7 +13,7 @@ Configure the existing C-model include root and library using Meson options
 ``torq_ext_incdir`` and ``torq_ext_lib``. The include root must provide
 ``cm/torq_cm.h``. Build both executables::
 
-  ninja -C BUILD qemu-system-aarch64 hw/misc/torq-cmodel-server
+  ninja -C BUILD qemu-system-aarch64 hw/misc/torq-device-model-server
 
 The normal ``torq_mpact_sim_incdir`` and ``torq_mpact_sim_lib`` options
 enable MPACT in the server, not in QEMU. Existing ``TORQ_MPACT_VERBOSE``
@@ -29,7 +29,7 @@ kernel, disk, and console arguments to::
 QEMU finds the server beside its executable or in ``hw/misc`` under the
 build directory. Override its executable with::
 
-  -global torq.server=/absolute/path/to/torq-cmodel-server
+  -global torq.server=/absolute/path/to/torq-device-model-server
 
 The default backend is ``cmodel``. ``-global torq.timeout-ms=300000``
 sets both the socket timeout and the host-clock job watchdog. An invalid

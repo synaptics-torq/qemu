@@ -97,9 +97,9 @@ After completing the steps above, configure from the parent checkout:
 
 Then build the QEMU system emulator and the Torq C model server:
 
-    ninja -C qemu-build qemu-system-aarch64 hw/misc/torq-cmodel-server
+    ninja -C qemu-build qemu-system-aarch64 hw/misc/torq-device-model-server
 
-This produces ``qemu-build/qemu-system-aarch64`` and ``qemu-build/hw/misc/torq-cmodel-server``.
+This produces ``qemu-build/qemu-system-aarch64`` and ``qemu-build/hw/misc/torq-device-model-server``.
 
 Usage
 -----
