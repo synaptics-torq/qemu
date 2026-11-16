@@ -32,9 +32,17 @@ build directory. Override its executable with::
   -global torq.server=/absolute/path/to/torq-cmodel-server
 
 The default backend is ``cmodel``. ``-global torq.timeout-ms=300000``
-sets both the socket timeout and the host-clock job watchdog. A server
-failure, invalid access, timeout, or unsupported active-job invalidation
-stops the VM with ``io-error``; it does not fabricate successful completion.
+sets both the socket timeout and the host-clock job watchdog. An invalid
+access, timeout, or unsupported active-job invalidation stops the VM with
+``io-error``; it does not fabricate successful completion.
+
+If the server process crashes (exits or closes its connection), QEMU
+respawns it, re-registers guest RAM, and lets the simulation continue.
+Any in-flight job and all device register state are lost: the IRQ line
+is lowered, the failed MMIO read returns all-ones, and the failed write
+is dropped, so the guest driver must recover through its own timeout and
+reset. If the respawn fails, the VM stops with ``io-error``. Disable
+restarting with ``-global torq.restart=off``.
 QEMU terminates and reaps its child on shutdown.
 
 Execution and synchronization

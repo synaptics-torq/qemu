@@ -37,6 +37,8 @@ struct TORQState {
     char *server_path;
     char *backend;
     uint32_t timeout_ms;
+    bool restart;
+    uint32_t restarts;
     int socket_fd;
     pid_t server_pid;
     uint32_t sequence;

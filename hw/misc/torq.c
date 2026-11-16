@@ -45,10 +45,69 @@ static void torq_disconnect(TORQState *s)
     }
 }
 
+/*
+ * Returns true if the server process has terminated or closed its end of the
+ * connection, as opposed to a live server that timed out or misbehaved.
+ */
+static bool torq_server_lost(TORQState *s)
+{
+    struct pollfd descriptor = { .fd = s->socket_fd, .events = POLLIN };
+    int wstatus;
+    char byte;
+
+    if (s->server_pid > 0 &&
+        waitpid(s->server_pid, &wstatus, WNOHANG) == s->server_pid) {
+        if (WIFSIGNALED(wstatus)) {
+            warn_report("TORQ server (pid %d) killed by signal %d",
+                        s->server_pid, WTERMSIG(wstatus));
+        } else {
+            warn_report("TORQ server (pid %d) exited with status %d",
+                        s->server_pid, WEXITSTATUS(wstatus));
+        }
+        s->server_pid = 0;
+        return true;
+    }
+    if (s->socket_fd < 0 || poll(&descriptor, 1, 0) <= 0) {
+        return false;
+    }
+    if (descriptor.revents & (POLLHUP | POLLERR)) {
+        return true;
+    }
+    return (descriptor.revents & POLLIN) &&
+           recv(s->socket_fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT) == 0;
+}
+
+static bool torq_connect(TORQState *s, Error **errp);
+
+static bool torq_restart(TORQState *s, const char *reason)
+{
+    Error *error = NULL;
+
+    if (!s->restart || !torq_server_lost(s)) {
+        return false;
+    }
+    warn_report("TORQ server crashed (%s); restarting it (restart %u), "
+                "any in-flight job is lost", reason, s->restarts + 1);
+    torq_disconnect(s);
+    s->busy = false;
+    s->prepared = false;
+    qemu_set_irq(s->irq, 0);
+    if (!torq_connect(s, &error)) {
+        error_report_err(error);
+        torq_disconnect(s);
+        return false;
+    }
+    s->restarts++;
+    return true;
+}
+
 static void torq_fail(TORQState *s, const char *reason)
 {
     if (s->watchdog) {
         timer_del(s->watchdog);
+    }
+    if (torq_restart(s, reason)) {
+        return;
     }
     error_report("TORQ server: %s", reason);
     torq_disconnect(s);
@@ -175,8 +234,11 @@ static bool torq_prepare(TORQState *s, Error **errp)
     g_autoptr(GArray) mappings = g_array_new(false, false, sizeof(TorqMapping));
     g_autoptr(GArray) physical = g_array_new(false, false, sizeof(TorqMapping));
 
-    struct pollfd descriptor = { .fd = s->socket_fd, .events = POLLIN };
-    while (s->socket_fd >= 0 && poll(&descriptor, 1, 0) > 0) {
+    struct pollfd descriptor = { .events = POLLIN };
+    uint32_t restarts = s->restarts;
+    /* A server restart replaces socket_fd, so refresh it every iteration. */
+    while (s->socket_fd >= 0 && restarts == s->restarts &&
+           (descriptor.fd = s->socket_fd, poll(&descriptor, 1, 0) > 0)) {
         torq_irq_ready(s);
     }
     if (s->busy) {
@@ -404,9 +466,8 @@ static void torq_unrealize(DeviceState *dev)
     }
 }
 
-static void torq_realize(DeviceState *dev, Error **errp)
+static bool torq_connect(TORQState *s, Error **errp)
 {
-    TORQState *s = TORQ(dev);
     posix_spawn_file_actions_t actions;
     int sockets[2];
     int status;
@@ -419,22 +480,9 @@ static void torq_realize(DeviceState *dev, Error **errp)
         .tv_usec = (s->timeout_ms % 1000) * 1000,
     };
 
-    if (!s->ram || !memory_region_is_ram(s->ram) ||
-        memory_region_get_fd(s->ram) < 0 ||
-        !qemu_ram_is_shared(s->ram->ram_block)) {
-        error_setg(errp,
-                "TORQ requires memory-backend-memfd,share=on guest RAM");
-        return;
-    }
-    if (!s->timeout_ms ||
-        !object_dynamic_cast(OBJECT(s->dma_as->root),
-                              TYPE_SMMUV3_IOMMU_MEMORY_REGION)) {
-        error_setg(errp, "TORQ requires SMMUv3 DMA and a nonzero timeout-ms");
-        return;
-    }
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets)) {
         error_setg_errno(errp, errno, "TORQ socketpair failed");
-        return;
+        return false;
     }
     qemu_set_cloexec(sockets[0]);
     qemu_set_cloexec(sockets[1]);
@@ -464,13 +512,14 @@ static void torq_realize(DeviceState *dev, Error **errp)
     posix_spawn_file_actions_destroy(&actions);
     close(sockets[1]);
     if (status) {
+        s->server_pid = 0;
         error_setg_errno(errp, status, "Cannot spawn TORQ server %s", path);
-        goto fail;
+        return false;
     }
     if (!torq_receive(s, &hello) || hello.type != TORQ_MSG_HELLO ||
         hello.value != TORQ_PROTOCOL_VERSION) {
         error_setg(errp, "TORQ server startup or protocol negotiation failed");
-        goto fail;
+        return false;
     }
     TorqRamRegion region = {
         .size = memory_region_size(s->ram),
@@ -478,6 +527,30 @@ static void torq_realize(DeviceState *dev, Error **errp)
     };
     if (!torq_request(s, TORQ_MSG_RAM, 0, &region, sizeof(region),
                        memory_region_get_fd(s->ram), NULL, errp)) {
+        return false;
+    }
+    qemu_set_fd_handler(s->socket_fd, torq_irq_ready, NULL, s);
+    return true;
+}
+
+static void torq_realize(DeviceState *dev, Error **errp)
+{
+    TORQState *s = TORQ(dev);
+
+    if (!s->ram || !memory_region_is_ram(s->ram) ||
+        memory_region_get_fd(s->ram) < 0 ||
+        !qemu_ram_is_shared(s->ram->ram_block)) {
+        error_setg(errp,
+                "TORQ requires memory-backend-memfd,share=on guest RAM");
+        return;
+    }
+    if (!s->timeout_ms ||
+        !object_dynamic_cast(OBJECT(s->dma_as->root),
+                              TYPE_SMMUV3_IOMMU_MEMORY_REGION)) {
+        error_setg(errp, "TORQ requires SMMUv3 DMA and a nonzero timeout-ms");
+        return;
+    }
+    if (!torq_connect(s, errp)) {
         goto fail;
     }
     iommu_notifier_init(&s->iommu_notifier, torq_iommu_notify,
@@ -496,7 +569,6 @@ static void torq_realize(DeviceState *dev, Error **errp)
     qemu_add_exit_notifier(&s->exit_notifier);
     s->exit_registered = true;
     s->watchdog = timer_new_ms(QEMU_CLOCK_REALTIME, torq_timeout, s);
-    qemu_set_fd_handler(s->socket_fd, torq_irq_ready, NULL, s);
     return;
 
 fail:
@@ -507,6 +579,7 @@ static const Property torq_properties[] = {
     DEFINE_PROP_STRING("server", TORQState, server_path),
     DEFINE_PROP_STRING("backend", TORQState, backend),
     DEFINE_PROP_UINT32("timeout-ms", TORQState, timeout_ms, 300000),
+    DEFINE_PROP_BOOL("restart", TORQState, restart, true),
 };
 
 static void torq_class_init(ObjectClass *klass, const void *data)
