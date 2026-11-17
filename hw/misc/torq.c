@@ -305,6 +305,11 @@ static bool torq_prepare(TORQState *s)
         error_report("TORQ has too many fragmented mappings");
         return false;
     }
+    /*
+     * Each IOVA range gets its own copy on the server, so aliases are not
+     * fatal, but results are only correct if the model never reads a RAM
+     * offset after writing it through another alias.
+     */
     g_array_append_vals(physical, mappings->data, mappings->len);
     g_array_sort(physical, torq_mapping_offset_compare);
     for (size_t index = 1; index < physical->len; index++) {
@@ -312,10 +317,11 @@ static bool torq_prepare(TORQState *s)
                                index - 1);
         TorqMapping *current = &g_array_index(physical, TorqMapping, index);
         if (previous->offset + previous->size > current->offset) {
-            error_report("TORQ IOVAs 0x%"PRIx64" and 0x%"PRIx64
-                         " alias RAM offset 0x%"PRIx64,
-                         previous->iova, current->iova, current->offset);
-            return false;
+            warn_report("TORQ IOVAs 0x%"PRIx64" (perm %u) and 0x%"PRIx64
+                        " (perm %u) alias RAM offset 0x%"PRIx64,
+                        previous->iova, previous->permissions,
+                        current->iova, current->permissions, current->offset);
+            break;
         }
     }
     s->generation++;
