@@ -228,8 +228,10 @@ static gint torq_mapping_offset_compare(gconstpointer first,
     return (left->offset > right->offset) - (left->offset < right->offset);
 }
 
-static bool torq_prepare(TORQState *s, Error **errp)
+/* Errors are logged and the job is not submitted; the guest will time out. */
+static bool torq_prepare(TORQState *s)
 {
+    Error *error = NULL;
     g_autoptr(GArray) entries = NULL;
     g_autoptr(GArray) mappings = g_array_new(false, false, sizeof(TorqMapping));
     g_autoptr(GArray) physical = g_array_new(false, false, sizeof(TorqMapping));
@@ -242,11 +244,12 @@ static bool torq_prepare(TORQState *s, Error **errp)
         torq_irq_ready(s);
     }
     if (s->busy) {
-        error_setg(errp, "TORQ does not support overlapping jobs");
+        error_report("TORQ does not support overlapping jobs");
         return false;
     }
-    entries = smmuv3_snapshot(s->dma_as, TORQ_IOVA_LIMIT, errp);
+    entries = smmuv3_snapshot(s->dma_as, TORQ_IOVA_LIMIT, &error);
     if (!entries) {
+        error_report_err(error);
         return false;
     }
     RCU_READ_LOCK_GUARD();
@@ -271,7 +274,7 @@ static bool torq_prepare(TORQState *s, Error **errp)
             remaining -= gap;
             if (!length) {
                 memory_region_unref(section.mr);
-                error_setg(errp, "TORQ snapshot contains an empty RAM extent");
+                error_report("TORQ snapshot contains an empty RAM extent");
                 return false;
             }
             if (section.mr == s->ram) {
@@ -299,7 +302,7 @@ static bool torq_prepare(TORQState *s, Error **errp)
         }
     }
     if (mappings->len > TORQ_PROTOCOL_MAX_PAYLOAD / sizeof(TorqMapping)) {
-        error_setg(errp, "TORQ has too many fragmented mappings");
+        error_report("TORQ has too many fragmented mappings");
         return false;
     }
     g_array_append_vals(physical, mappings->data, mappings->len);
@@ -309,15 +312,16 @@ static bool torq_prepare(TORQState *s, Error **errp)
                                index - 1);
         TorqMapping *current = &g_array_index(physical, TorqMapping, index);
         if (previous->offset + previous->size > current->offset) {
-            error_setg(errp, "TORQ IOVAs 0x%"PRIx64" and 0x%"PRIx64
-                       " alias RAM offset 0x%"PRIx64,
-                       previous->iova, current->iova, current->offset);
+            error_report("TORQ IOVAs 0x%"PRIx64" and 0x%"PRIx64
+                         " alias RAM offset 0x%"PRIx64,
+                         previous->iova, current->iova, current->offset);
             return false;
         }
     }
     s->generation++;
     if (!torq_request(s, TORQ_MSG_PREPARE, 0, mappings->data,
-                       mappings->len * sizeof(TorqMapping), -1, NULL, errp)) {
+                       mappings->len * sizeof(TorqMapping), -1, NULL, &error)) {
+        error_report_err(error);
         return false;
     }
     if (s->mappings) {
@@ -337,18 +341,23 @@ static uint64_t torq_read(void *opaque, hwaddr address, unsigned int size)
     for (unsigned int offset = 0; offset < size; offset += 4) {
         uint64_t value = 0;
         uint32_t register_address = address + offset;
-        if ((torq_execution_read(register_address) && !s->prepared &&
-             !torq_prepare(s, &error)) ||
-            !torq_request(s, TORQ_MSG_READ,
+        if (torq_execution_read(register_address) && !s->prepared &&
+            !torq_prepare(s)) {
+            continue;
+        }
+        if (!torq_request(s, TORQ_MSG_READ,
                            (uint64_t)register_address << 32,
                            NULL, 0, -1, &value, &error)) {
-            torq_fail(s, error_get_pretty(error));
-            error_free(error);
-            return UINT64_MAX;
+            goto fail;
         }
         result |= (uint64_t)(uint32_t)value << (offset * 8);
     }
     return result;
+
+fail:
+    torq_fail(s, error_get_pretty(error));
+    error_free(error);
+    return UINT64_MAX;
 }
 
 static void torq_write(void *opaque, hwaddr address,
@@ -361,10 +370,11 @@ static void torq_write(void *opaque, hwaddr address,
         uint32_t register_address = address + offset;
         uint32_t word = value >> (offset * 8);
         bool launch = torq_execution_write(register_address, word);
-        if (launch && !torq_prepare(s, &error)) {
-            goto fail;
-        }
         if (launch) {
+            if (!torq_prepare(s)) {
+                /* Drop the launch; the guest driver will time out. */
+                continue;
+            }
             s->busy = true;
             timer_mod(s->watchdog,
                         qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + s->timeout_ms);
