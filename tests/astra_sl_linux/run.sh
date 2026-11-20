@@ -89,7 +89,7 @@ echo "Starting Astra SL with the extracted kernel and initramfs (ssh: localhost:
 exec "$QEMU" \
     -machine astra_sl,memory-backend=ram \
     -m "$QEMU_RAM_SIZE" \
-    -object "memory-backend-memfd,id=ram,size=$QEMU_RAM_SIZE,share=on" \
+    -object "memory-backend-shm,id=ram,size=$QEMU_RAM_SIZE,share=on" \
     -global "torq.backend=$TORQ_BACKEND" \
     -accel tcg \
     ${icount_args[@]+"${icount_args[@]}"} \
