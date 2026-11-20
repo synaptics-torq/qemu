@@ -36,6 +36,8 @@ struct TORQState {
     MemoryRegion *ram;
     char *server_path;
     char *backend;
+    char *time_scale_str;
+    double time_scale;
     uint32_t timeout_ms;
     bool restart;
     uint32_t restarts;
@@ -51,6 +53,7 @@ struct TORQState {
     bool prepared;
     bool busy;
     QEMUTimer *watchdog;
+    QEMUTimer *completion;
     Error *migration_blocker;
 };
 

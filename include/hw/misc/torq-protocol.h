@@ -25,7 +25,11 @@
  *   server: upload shared guest RAM into local XRAM at the supplied IOVAs
  *   server -> QEMU: REPLY (upload complete)
  *   QEMU -> server: execution-triggering WRITE or READ
- *   server: execute/progress, then copy results back into shared guest RAM
+ *   server: execute to completion, retaining results in backend-local memory
+ *   server -> QEMU: REPLY (value = execution duration in nanoseconds)
+ *   QEMU: schedule completion at launch virtual time + scaled duration
+ *   QEMU -> server: COMMIT at the virtual deadline
+ *   server: copy results back into shared guest RAM
  *   server -> QEMU: IRQ (value = current level, 0 or 1)
  *   QEMU: mark guest RAM dirty, finish the job and update the guest IRQ line
  *
@@ -35,20 +39,24 @@
  * Ordinary C-model writes update registers; subsequent server IRQ sampling
  * can execute pending work. Status reads can also execute work. Thus IRQ
  * delivery does not require the guest to poll. The FPGA starts on its launch
- * write, after upload, and the server polls its completion/IRQ sources.
+ * write, after upload, and the server polls its completion/IRQ sources before
+ * replying. FPGA duration excludes RAM transfers; C-model duration is fixed
+ * at 1000 ns. While awaiting COMMIT, completion registers retain their
+ * pre-execution values (with the launch reflected), and results stay local.
  *
  * Each request receives a REPLY with the same id; status is zero on success
  * or a negative errno on failure. IRQ is unsolicited and may precede a REPLY,
  * so a waiting client must dispatch events until its matching reply arrives.
- * Results are published before an IRQ event or an execution-read reply.
- * Currently IRQ also implies completed execution, even for level zero; it
- * is not an intermediate progress notification. IRQ deassertion uses level 0.
+ * Results are published before the COMMIT IRQ event and reply. Status reads
+ * during a pending virtual job do not publish results or generate IRQ events.
+ * IRQ deassertion uses level 0.
  *
  * PREPARE generations increase monotonically. IRQ carries its generation;
  * QEMU ignores older events and rejects future ones. INVALIDATE discards
  * snapshot validity after an idle IOMMU invalidation; a fresh PREPARE is then
  * required before execution. Active-job invalidation is unsupported. RESET
- * resets the backend, invalidates preparation and publishes IRQ level zero.
+ * resets the backend, discards uncommitted results, invalidates preparation
+ * and publishes IRQ level zero.
  * STOP requests an orderly reply and server exit.
  *
  * Every frame is a TorqMessage followed by size payload bytes. RAM carries
@@ -58,11 +66,12 @@
  * reply data use value[31:0]. QEMU splits 64-bit MMIO into two ordered 32-bit
  * requests. Other messages have no payload or FD.
  *
- * Version 1 uses the fixed-size native-endian structures below. Both peers
+ * COMMIT requires the current PREPARE generation and a pending completion.
+ * Version 2 uses the fixed-size native-endian structures below. Both peers
  * must share the same ABI/endianness; this is a trusted same-host transport.
  */
 
-#define TORQ_PROTOCOL_VERSION 1
+#define TORQ_PROTOCOL_VERSION 2
 #define TORQ_PROTOCOL_MAX_PAYLOAD (32U * 1024U * 1024U)
 #define TORQ_PROTOCOL_MAX_REGIONS 64
 #define TORQ_IOVA_LIMIT (UINT64_C(1) << 32)
@@ -85,6 +94,7 @@ enum TorqMessageType {
     TORQ_MSG_RESET,
     TORQ_MSG_STOP,
     TORQ_MSG_INVALIDATE,
+    TORQ_MSG_COMMIT,
     TORQ_MSG_REPLY = 0x100,
     TORQ_MSG_IRQ,
 };

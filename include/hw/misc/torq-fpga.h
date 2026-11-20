@@ -21,6 +21,7 @@ int torq_fpga_memory(TorqFpga *fpga, uint32_t address, size_t size,
                       uint8_t *data, bool writing);
 int torq_fpga_get_irq(TorqFpga *fpga, uint32_t *irq);
 bool torq_fpga_busy(TorqFpga *fpga);
+uint64_t torq_fpga_elapsed_ns(TorqFpga *fpga);
 int torq_fpga_reset(TorqFpga *fpga);
 
 #endif
