@@ -71,6 +71,19 @@ if [[ -n "$QEMU_ICOUNT" ]]; then
     icount_args=(-icount "$QEMU_ICOUNT")
 fi
 
+console_args=(-nographic)
+if [[ -n "${QEMU_SERIAL_SOCKET:-}" ]]; then
+    : "${QEMU_SERIAL_LOG:?QEMU_SERIAL_LOG must be set with QEMU_SERIAL_SOCKET}"
+    # Bind by basename so deep log directories work within the Unix socket path limit.
+    cd -- "${QEMU_SERIAL_SOCKET%/*}"
+    serial_socket="${QEMU_SERIAL_SOCKET##*/}"
+    console_args=(
+        -display none -monitor none
+        -chardev "socket,id=guestserial,path=${serial_socket//,/,,},server=on,wait=off,logfile=${QEMU_SERIAL_LOG//,/,,},logappend=on"
+        -serial chardev:guestserial
+    )
+fi
+
 echo "Starting Astra SL with the extracted kernel and initramfs (ssh: localhost:$SSH_PORT, adb: localhost:$ADB_PORT)..."
 
 exec "$QEMU" \
@@ -87,4 +100,4 @@ exec "$QEMU" \
     -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22,hostfwd=tcp:127.0.0.1:"$ADB_PORT"-:5555 \
     -device virtio-net-device,netdev=net0 \
     -append "$kernel_cmdline" \
-    -nographic
+    "${console_args[@]}"
