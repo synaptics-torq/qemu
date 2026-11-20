@@ -22,6 +22,7 @@
 #include "system/ramblock.h"
 #include "system/runstate.h"
 #include "system/system.h"
+#include <math.h>
 #include <spawn.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -29,6 +30,9 @@
 
 static void torq_disconnect(TORQState *s)
 {
+    if (s->completion) {
+        timer_del(s->completion);
+    }
     if (s->socket_fd >= 0) {
         qemu_set_fd_handler(s->socket_fd, NULL, NULL, NULL);
         close(s->socket_fd);
@@ -204,6 +208,17 @@ static bool torq_request(TORQState *s, uint32_t type, uint64_t value,
     return false;
 }
 
+static void torq_complete(void *opaque)
+{
+    TORQState *s = opaque;
+    Error *error = NULL;
+
+    if (!torq_request(s, TORQ_MSG_COMMIT, 0, NULL, 0, -1, NULL, &error)) {
+        torq_fail(s, error_get_pretty(error));
+        error_free(error);
+    }
+}
+
 static void torq_irq_ready(void *opaque)
 {
     TORQState *s = opaque;
@@ -376,19 +391,36 @@ static void torq_write(void *opaque, hwaddr address,
         uint32_t register_address = address + offset;
         uint32_t word = value >> (offset * 8);
         bool launch = torq_execution_write(register_address, word);
+        int64_t started_ns = 0;
+        uint64_t duration_ns = 0;
+
         if (launch) {
             if (!torq_prepare(s)) {
                 /* Drop the launch; the guest driver will time out. */
                 continue;
             }
-            s->busy = true;
+            started_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
             timer_mod(s->watchdog,
                         qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + s->timeout_ms);
         }
         if (!torq_request(s, TORQ_MSG_WRITE,
                            ((uint64_t)register_address << 32) | word,
-                           NULL, 0, -1, NULL, &error)) {
+                           NULL, 0, -1, &duration_ns, &error)) {
             goto fail;
+        }
+        if (launch) {
+            long double scaled_ns = ceill((long double)duration_ns *
+                                          s->time_scale);
+
+            if (!isfinite(scaled_ns) ||
+                scaled_ns > INT64_MAX - started_ns) {
+                error_setg(&error, "TORQ scaled job duration overflows "
+                           "the virtual clock");
+                goto fail;
+            }
+            timer_del(s->watchdog);
+            s->busy = true;
+            timer_mod(s->completion, started_ns + (int64_t)scaled_ns);
         }
     }
     return;
@@ -465,6 +497,10 @@ static void torq_unrealize(DeviceState *dev)
     if (s->watchdog) {
         timer_free(s->watchdog);
         s->watchdog = NULL;
+    }
+    if (s->completion) {
+        timer_free(s->completion);
+        s->completion = NULL;
     }
     if (s->notifier_registered) {
         memory_region_unregister_iommu_notifier(s->dma_as->root,
@@ -553,6 +589,13 @@ static void torq_realize(DeviceState *dev, Error **errp)
 {
     TORQState *s = TORQ(dev);
 
+    s->time_scale = 1;
+    if (s->time_scale_str &&
+        (qemu_strtod_finite(s->time_scale_str, NULL, &s->time_scale) < 0 ||
+         s->time_scale <= 0)) {
+        error_setg(errp, "TORQ time-scale must be finite and positive");
+        return;
+    }
     if (!s->ram || !memory_region_is_ram(s->ram) ||
         memory_region_get_fd(s->ram) < 0 ||
         !qemu_ram_is_shared(s->ram->ram_block)) {
@@ -585,6 +628,7 @@ static void torq_realize(DeviceState *dev, Error **errp)
     qemu_add_exit_notifier(&s->exit_notifier);
     s->exit_registered = true;
     s->watchdog = timer_new_ms(QEMU_CLOCK_REALTIME, torq_timeout, s);
+    s->completion = timer_new_ns(QEMU_CLOCK_VIRTUAL, torq_complete, s);
     return;
 
 fail:
@@ -594,6 +638,7 @@ fail:
 static const Property torq_properties[] = {
     DEFINE_PROP_STRING("server", TORQState, server_path),
     DEFINE_PROP_STRING("backend", TORQState, backend),
+    DEFINE_PROP_STRING("time-scale", TORQState, time_scale_str),
     DEFINE_PROP_UINT32("timeout-ms", TORQState, timeout_ms, 300000),
     DEFINE_PROP_BOOL("restart", TORQState, restart, true),
 };
@@ -643,6 +688,8 @@ void torq_reset_line_cb(void *opaque, bool asserted)
     if (asserted) {
         Error *error = NULL;
 
+        timer_del(s->completion);
+        timer_del(s->watchdog);
         if (!torq_request(s, TORQ_MSG_RESET, 0, NULL, 0, -1, NULL, &error)) {
             torq_fail(s, error_get_pretty(error));
             error_free(error);

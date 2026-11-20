@@ -32,7 +32,9 @@ class TorqServerTest(unittest.TestCase):
         child_socket.close()
         self.events = []
         self.sequence = 0
-        self.assertEqual(self.receive()[0][:2], (1, 0))
+        hello, _ = self.receive()
+        self.assertEqual(hello[:2], (1, 0))
+        self.assertEqual(hello[4], 2)
         self.shared_file = tempfile.TemporaryFile()
         self.fd = self.shared_file.fileno()
         os.ftruncate(self.fd, 8192)
@@ -109,7 +111,14 @@ class TorqServerTest(unittest.TestCase):
         self.write(0x1F0004, 1 << 28)
         self.write(0x1F0008, int(interrupts))
         self.write(0x1FC004, int(interrupts))
+        self.events.clear()
         self.write(0x1F0010, 1)
+        self.assertFalse(any(event[4] for event in self.events))
+        self.events.clear()
+        self.assertTrue(self.read(0x1F0010) & 1)
+        self.assertEqual(self.read(0x1F000C) & 1, 0)
+        self.assertFalse(self.events)
+        self.request(9, generation=1)
         if interrupts:
             while not any(event[4] for event in self.events):
                 event, _ = self.receive()
@@ -149,6 +158,7 @@ class TorqServerTest(unittest.TestCase):
         self.write(0x1F0008, 1)
         self.write(0x1FC004, 1)
         self.write(0x1F0010, 1)
+        self.request(9, generation=1)
         while not any(event[4] for event in self.events):
             event, _ = self.receive()
             self.assertEqual(event[0], 0x101)
@@ -182,6 +192,11 @@ class TorqServerTest(unittest.TestCase):
         self.write(0x1FC004, 1 << 12)
         self.events.clear()
         self.write(0x1FF000, 1)
+        self.assertFalse(any(event[4] for event in self.events))
+        self.events.clear()
+        self.assertEqual(self.read(0x1FF004) & (1 << 16), 0)
+        self.assertFalse(self.events)
+        self.request(9, generation=1)
         try:
             while not any(event[4] for event in self.events):
                 event, _ = self.receive()
@@ -204,6 +219,55 @@ class TorqServerTest(unittest.TestCase):
             self.fail(f"CDMA IRQ timed out; registers: {registers}")
         self.assertEqual(self.read(4), 0xA1B2C3D4)
         self.assertTrue(self.read(0x1FF004) & (1 << 16))
+        self.request(7)
+
+    def test_completion_generation_and_reset(self):
+        self.request(3, generation=1)
+        self.write(0, 0x90010100)
+        self.write(4, 0)
+        self.write(0x1F0004, 1 << 28)
+        duration = self.write(0x1F0010, 1)
+        if os.environ.get("TORQ_TEST_BACKEND", "cmodel") == "cmodel":
+            self.assertEqual(duration, 1000)
+        self.request(9, generation=0, status=-22)
+        self.assertEqual(self.read(0x1F000C) & 1, 0)
+        self.request(6)
+        self.request(9, generation=1, status=-22)
+        self.request(3, generation=2)
+        self.assertEqual(self.read(0x1F000C) & 1, 0)
+        self.request(7)
+
+    def test_shared_results_wait_for_commit(self):
+        expected = bytes(range(64))
+        self.memory[:64] = bytes(64)
+        self.request(3, payload=MAPPING.pack(0x40010000, 0, 4096, 0, 3),
+                     generation=1)
+        for offset in range(0, len(expected), 4):
+            self.write(0x100 + offset,
+                       int.from_bytes(expected[offset:offset + 4], "little"))
+        program = (
+            0x100B0130, 0x00020011, 64, 0x100, 0x10000040,
+            0x40010000, 1, 0, 0, 0, 0, 0,
+            0x10030008, 1, 8, 8, 0xE0000008,
+        )
+        for index, value in enumerate(program):
+            self.write(index * 4, value)
+        self.write(0x1F0004, 1 << 28)
+        self.write(0x1F0008, 1)
+        self.write(0x1FC004, 1)
+        self.events.clear()
+        self.write(0x1F0010, 1)
+        self.assertFalse(any(event[4] for event in self.events))
+        self.events.clear()
+        self.assertEqual(self.memory[:64], bytes(64))
+        self.assertEqual(self.read(0x1F000C) & 1, 0)
+        self.assertFalse(self.events)
+        self.memory[100] = 0xAA
+        self.request(9, generation=1)
+        self.assertEqual(self.memory[:64], expected)
+        if os.environ.get("TORQ_TEST_BACKEND", "cmodel") == "cmodel":
+            self.assertEqual(self.memory[100], 0xAA)
+        self.request(9, generation=1, status=-22)
         self.request(7)
 
 

@@ -15,6 +15,7 @@
 #include <string.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #include <fpga_pci.h>
 
@@ -25,6 +26,8 @@ struct TorqFpga {
     int lock_fd;
     uint32_t launch_address;
     uint32_t launch_value;
+    struct timespec started;
+    uint64_t elapsed_ns;
     bool busy;
 };
 
@@ -72,11 +75,16 @@ int torq_fpga_read32(TorqFpga *fpga, uint32_t address, uint32_t *value)
 
 int torq_fpga_write32(TorqFpga *fpga, uint32_t address, uint32_t value)
 {
+    bool launch = torq_execution_write(address, value);
+
     atomic_thread_fence(memory_order_seq_cst);
+    if (launch && clock_gettime(CLOCK_MONOTONIC, &fpga->started)) {
+        return -errno;
+    }
     if (fpga_pci_poke(fpga->registers, address, value)) {
         return -EIO;
     }
-    if (torq_execution_write(address, value)) {
+    if (launch) {
         fpga->launch_address = address;
         fpga->launch_value = value;
         fpga->busy = true;
@@ -147,6 +155,17 @@ int torq_fpga_get_irq(TorqFpga *fpga, uint32_t *irq)
         } else {
             fpga->busy = !(pending & (1U << 9));
         }
+        if (!fpga->busy) {
+            struct timespec completed;
+
+            if (clock_gettime(CLOCK_MONOTONIC, &completed)) {
+                return -errno;
+            }
+            fpga->elapsed_ns =
+                (completed.tv_sec - fpga->started.tv_sec) *
+                INT64_C(1000000000) +
+                completed.tv_nsec - fpga->started.tv_nsec;
+        }
     }
     return 0;
 }
@@ -154,6 +173,11 @@ int torq_fpga_get_irq(TorqFpga *fpga, uint32_t *irq)
 bool torq_fpga_busy(TorqFpga *fpga)
 {
     return fpga->busy;
+}
+
+uint64_t torq_fpga_elapsed_ns(TorqFpga *fpga)
+{
+    return fpga->elapsed_ns;
 }
 
 int torq_fpga_reset(TorqFpga *fpga)
