@@ -557,7 +557,7 @@ static void torq_realize(DeviceState *dev, Error **errp)
         memory_region_get_fd(s->ram) < 0 ||
         !qemu_ram_is_shared(s->ram->ram_block)) {
         error_setg(errp,
-                "TORQ requires memory-backend-memfd,share=on guest RAM");
+                "TORQ requires shared guest RAM (memory-backend-shm or memory-backend-memfd, share=on)");
         return;
     }
     if (!s->timeout_ms ||

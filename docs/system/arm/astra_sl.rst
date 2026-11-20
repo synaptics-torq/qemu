@@ -24,7 +24,11 @@ kernel, disk, and console arguments to::
 
   BUILD/qemu-system-aarch64 \
     -machine astra_sl,memory-backend=ram -m 2G \
-    -object memory-backend-memfd,id=ram,size=2G,share=on
+    -object memory-backend-shm,id=ram,size=2G,share=on
+
+``memory-backend-shm`` works on Linux and macOS. On Linux it lives in
+``/dev/shm``, which must hold the RAM of every guest: Docker limits it to
+64 MB unless the container runs with ``--shm-size``.
 
 QEMU finds the server beside its executable or in ``hw/misc`` under the
 build directory. Override its executable with::
