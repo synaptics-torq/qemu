@@ -16,7 +16,7 @@
 static QTestState *torq_start(void)
 {
     return qtest_init("-machine astra_sl,memory-backend=ram -m 512M "
-                       "-object memory-backend-memfd,id=ram,size=512M,share=on "
+                       "-object memory-backend-shm,id=ram,size=512M,share=on "
                        "-nodefaults -display none");
 }
 
@@ -53,7 +53,7 @@ static void torq_virtual_completion(void)
 {
     QTestState *qts = qtest_init(
         "-machine astra_sl,memory-backend=ram -m 512M "
-        "-object memory-backend-memfd,id=ram,size=512M,share=on "
+        "-object memory-backend-shm,id=ram,size=512M,share=on "
         "-global torq.time-scale=2.5 -nodefaults -display none");
     int64_t started;
 
@@ -95,7 +95,7 @@ static void torq_concurrent_guest(void)
     };
     QTestState *qts = qtest_init(
         "-machine astra_sl,memory-backend=ram -m 512M -smp 1 "
-        "-object memory-backend-memfd,id=ram,size=512M,share=on "
+        "-object memory-backend-shm,id=ram,size=512M,share=on "
         "-global torq.time-scale=10 -accel tcg "
         "-icount shift=0,sleep=off -S "
         "-device loader,addr=0x40000000,cpu-num=0 "

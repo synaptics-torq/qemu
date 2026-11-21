@@ -194,6 +194,16 @@ static bool torq_request(TORQState *s, uint32_t type, uint64_t value,
         if (message.type != TORQ_MSG_REPLY || message.id != id) {
             break;
         }
+        if (message.status == -ETIMEDOUT) {
+            error_setg(errp, "TORQ job did not complete within job-timeout-ms (%u ms)",
+                       s->job_timeout_ms);
+            return false;
+        }
+        if (message.status == -EBUSY) {
+            error_setg(errp, "TORQ operation %u while a job is pending: overlapping jobs "
+                       "and completion register writes during a job are unsupported", type);
+            return false;
+        }
         if (message.status < 0) {
             error_setg(errp, "TORQ server rejected operation %u: %s",
                        type, strerror(-message.status));
@@ -555,8 +565,11 @@ static bool torq_connect(TORQState *s, Error **errp)
     char fd_number[] = "3";
     char backend_option[] = "--backend";
     char default_backend[] = "cmodel";
+    char job_timeout_option[] = "--job-timeout-ms";
+    g_autofree char *job_timeout = g_strdup_printf("%u", s->job_timeout_ms);
     char *arguments[] = { (char *)path, fd_option, fd_number, backend_option,
-                          s->backend ? s->backend : default_backend, NULL };
+                          s->backend ? s->backend : default_backend,
+                          job_timeout_option, job_timeout, NULL };
     posix_spawn_file_actions_init(&actions);
     posix_spawn_file_actions_adddup2(&actions, sockets[1], 3);
     status = posix_spawn(&s->server_pid, path, &actions, NULL,
@@ -640,6 +653,8 @@ static const Property torq_properties[] = {
     DEFINE_PROP_STRING("backend", TORQState, backend),
     DEFINE_PROP_STRING("time-scale", TORQState, time_scale_str),
     DEFINE_PROP_UINT32("timeout-ms", TORQState, timeout_ms, 300000),
+    /* an FPGA job hangs the guest until it completes: fail it after this time (0: no limit) */
+    DEFINE_PROP_UINT32("job-timeout-ms", TORQState, job_timeout_ms, 30000),
     DEFINE_PROP_BOOL("restart", TORQState, restart, true),
 };
 

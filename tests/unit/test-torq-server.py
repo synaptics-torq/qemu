@@ -271,5 +271,22 @@ class TorqServerTest(unittest.TestCase):
         self.request(7)
 
 
+class TorqServerOptionsTest(unittest.TestCase):
+    def start(self, *options):
+        return subprocess.run([SERVER, "--fd", "3", *options],
+                              capture_output=True, text=True, timeout=10)
+
+    def test_invalid_job_timeout(self):
+        for value in ("x", "-1", "4294967296", ""):
+            with self.subTest(value=value):
+                result = self.start("--job-timeout-ms", value)
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_unknown_option(self):
+        result = self.start("--unknown", "1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Usage", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

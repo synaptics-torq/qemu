@@ -58,6 +58,18 @@ enum {
                                 sizeof(completion_registers[0]),
 };
 
+/* A launch polls the backend without sleeping for this long, then every TORQ_POLL_NS. */
+#define TORQ_SPIN_NS INT64_C(2000000)
+#define TORQ_POLL_NS 100000
+
+static int64_t monotonic_ns(void)
+{
+    struct timespec now;
+
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (int64_t)now.tv_sec * 1000000000 + now.tv_nsec;
+}
+
 typedef struct TorqServer {
     int socket_fd;
     void *model;
@@ -80,6 +92,8 @@ typedef struct TorqServer {
     bool completion_pending;
     uint32_t visible_registers[COMPLETION_REGISTER_COUNT];
     uint32_t irq;
+    /* An FPGA job that does not complete in this time fails its launch (0: no limit). */
+    uint32_t job_timeout_ms;
 } TorqServer;
 
 static int cmodel_consume_start(TorqServer *server)
@@ -403,12 +417,28 @@ static int launch(TorqServer *server, uint32_t address, uint32_t value,
         return status;
     }
     server->results_pending = true;
-    do {
+    int64_t launched_ns = monotonic_ns();
+    for (;;) {
         if (sample_irq(server, &irq)) {
             return -EIO;
         }
-        if (server->progress) {
-            struct timespec delay = { .tv_nsec = 100000 };
+        if (!server->progress) {
+            break;
+        }
+        int64_t waited_ns = monotonic_ns() - launched_ns;
+#ifdef CONFIG_TORQ_AWS_FPGA
+        /* A C-model job runs while it is sampled, so only FPGA jobs can hang here. */
+        if (server->fpga && server->job_timeout_ms &&
+            waited_ns > (int64_t)server->job_timeout_ms * 1000000) {
+            return -ETIMEDOUT;
+        }
+#endif
+        /*
+         * The FPGA duration is measured when the completion is observed: poll without
+         * sleeping at first, so short jobs are measured to one poll, then back off.
+         */
+        if (waited_ns > TORQ_SPIN_NS) {
+            struct timespec delay = { .tv_nsec = TORQ_POLL_NS };
 
             while (nanosleep(&delay, &delay)) {
                 if (errno != EINTR) {
@@ -416,7 +446,7 @@ static int launch(TorqServer *server, uint32_t address, uint32_t value,
                 }
             }
         }
-    } while (server->progress);
+    }
     *duration_ns = 1000;
 #ifdef CONFIG_TORQ_AWS_FPGA
     if (server->fpga) {
@@ -556,18 +586,42 @@ int main(int argc, char **argv)
     int result = EXIT_FAILURE;
     char *end;
 
-    if ((argc != 3 && argc != 5) || strcmp(argv[1], "--fd") ||
-        (argc == 5 && strcmp(argv[3], "--backend"))) {
+    const char *socket_option = NULL;
+    const char *backend = "cmodel";
+    const char *job_timeout_option = NULL;
+
+    for (int index = 1; index + 1 < argc; index += 2) {
+        if (!strcmp(argv[index], "--fd")) {
+            socket_option = argv[index + 1];
+        } else if (!strcmp(argv[index], "--backend")) {
+            backend = argv[index + 1];
+        } else if (!strcmp(argv[index], "--job-timeout-ms")) {
+            job_timeout_option = argv[index + 1];
+        } else {
+            socket_option = NULL;
+            break;
+        }
+    }
+    if (!socket_option || argc % 2 != 1) {
         fprintf(stderr,
-            "Usage: %s --fd SOCKET_FD [--backend cmodel|aws-fpga]\n",
+            "Usage: %s --fd SOCKET_FD [--backend cmodel|aws-fpga] [--job-timeout-ms MS]\n",
                 argv[0]);
         return EXIT_FAILURE;
     }
     errno = 0;
-    long socket_fd = strtol(argv[2], &end, 10);
-    if (errno || end == argv[2] || *end || socket_fd < 0 ||
+    long socket_fd = strtol(socket_option, &end, 10);
+    if (errno || end == socket_option || *end || socket_fd < 0 ||
         socket_fd > INT32_MAX) {
         return EXIT_FAILURE;
+    }
+    if (job_timeout_option) {
+        errno = 0;
+        unsigned long job_timeout_ms = strtoul(job_timeout_option, &end, 10);
+        if (errno || end == job_timeout_option || *end || job_timeout_ms > UINT32_MAX) {
+            fprintf(stderr, "TORQ: invalid --job-timeout-ms %s\n", job_timeout_option);
+            return EXIT_FAILURE;
+        }
+        server.job_timeout_ms = job_timeout_ms;
     }
     server.socket_fd = socket_fd;
     signal(SIGPIPE, SIG_IGN);
@@ -583,7 +637,7 @@ int main(int argc, char **argv)
         perror("TORQ XRAM allocation");
         return EXIT_FAILURE;
     }
-    if (argc == 3 || !strcmp(argv[4], "cmodel")) {
+    if (!strcmp(backend, "cmodel")) {
         server.model = torq_cm_open(server.xram, 0, TORQ_IOVA_LIMIT);
         if (!server.model ||
             torq_cm__set_ext_mem_if(server.model, &server,
@@ -595,7 +649,7 @@ int main(int argc, char **argv)
 #endif
     } else {
 #ifdef CONFIG_TORQ_AWS_FPGA
-        if (!strcmp(argv[4], "aws-fpga")) {
+        if (!strcmp(backend, "aws-fpga")) {
             server.fpga = torq_fpga_open();
         }
         if (!server.fpga) {

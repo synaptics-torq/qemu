@@ -43,10 +43,22 @@ to that deadline.
 
 `TORQ_TIME_SCALE` sets the positive, finite multiplier for backend duration
 (default `1`). FPGA duration is measured with a host monotonic clock from launch
-to observed completion, excluding input uploads and output downloads. Completion
-is polled at 100 us intervals, so the measurement includes polling and host
-scheduling latency; it is not a hardware cycle measurement. C-model jobs
-currently use a fixed 1000 ns duration, also multiplied by the scale.
+to observed completion, excluding input uploads and output downloads. The server
+polls the completion without sleeping for the first 2 ms, then every 100 us, so
+a short job is measured to within one poll of the FPGA registers and a longer one
+to within about 100 us plus host scheduling latency; it is not a hardware cycle
+measurement. C-model jobs currently use a fixed 1000 ns duration, also
+multiplied by the scale.
+
+The guest stays blocked in the register write that launches a job until the
+backend completes it. An FPGA job that does not complete within the device's
+`job-timeout-ms` (default 30000, `0` for no limit) fails, and QEMU restarts the
+server; a C-model job is bounded only by `timeout-ms`, the server reply timeout.
+
+Times measured inside the guest are virtual: with `shift=0`, one guest
+instruction is 1 ns, and TORQ jobs take their scaled duration. Wall-clock times
+measured in the guest (for example with `time`) are therefore not host times,
+and C-model jobs look nearly instant.
 
 ```bash
 TORQ_BACKEND=aws-fpga TORQ_TIME_SCALE=0.1 ./run.sh

@@ -39,6 +39,7 @@ struct TORQState {
     char *time_scale_str;
     double time_scale;
     uint32_t timeout_ms;
+    uint32_t job_timeout_ms;
     bool restart;
     uint32_t restarts;
     int socket_fd;
