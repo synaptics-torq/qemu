@@ -25,6 +25,15 @@ if host_os in ['linux', 'darwin'] and torq_ext_incdir != '' and torq_ext_lib != 
   if torq_mpact_enabled
     torq_server_args += ['-DCONFIG_TORQ_MPACT=1']
   endif
+  # tests/unit/test-torq-server-fpga.py runs the FPGA backend of the server on a fake FPGA
+  # (tests/unit/fake-fpga), on any host and without the AWS FPGA SDK
+  torq_server_fake_fpga = executable('torq-device-model-server-fake-fpga',
+    torq_server_sources + files('torq-fpga.c', '../../tests/unit/fake-fpga/fake_fpga.c'),
+    dependencies: torq_server_dependencies,
+    include_directories: include_directories('../../tests/unit/fake-fpga'),
+    c_args: torq_server_args + ['-DCONFIG_TORQ_AWS_FPGA=1'],
+    link_args: ['-lm'],
+    build_by_default: false)
   if host_os == 'linux' and get_option('torq_fpga_incdir') != '' and get_option('torq_fpga_lib') != ''
     torq_server_sources += files('torq-fpga.c')
     torq_server_args += ['-DCONFIG_TORQ_AWS_FPGA=1']

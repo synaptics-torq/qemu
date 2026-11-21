@@ -71,6 +71,14 @@ if host_os == 'linux'
   endif
 endif
 
+if host_os in ['linux', 'darwin'] and is_variable('torq_server_fake_fpga')
+  test('test-torq-server-fpga', python,
+    args: [files('test-torq-server-fpga.py'), torq_server_fake_fpga],
+    depends: torq_server_fake_fpga,
+    timeout: 60,
+    suite: ['unit'])
+endif
+
 if have_block
   tests += {
     'test-coroutine': [testblock],
