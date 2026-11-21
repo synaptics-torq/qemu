@@ -36,7 +36,10 @@ struct TORQState {
     MemoryRegion *ram;
     char *server_path;
     char *backend;
+    char *time_scale_str;
+    double time_scale;
     uint32_t timeout_ms;
+    uint32_t job_timeout_ms;
     bool restart;
     uint32_t restarts;
     int socket_fd;
@@ -51,6 +54,7 @@ struct TORQState {
     bool prepared;
     bool busy;
     QEMUTimer *watchdog;
+    QEMUTimer *completion;
     Error *migration_blocker;
 };
 

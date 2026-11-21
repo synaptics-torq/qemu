@@ -6,8 +6,10 @@ QEMU_BUILD_DIR="${QEMU_BUILD_DIR:-$BASEDIR/../../build}"
 QEMU="$QEMU_BUILD_DIR/qemu-system-aarch64"
 QEMU_RAM_SIZE="${QEMU_RAM_SIZE:-2G}"
 TORQ_BACKEND="${TORQ_BACKEND:-cmodel}"
-# Virtual time only advances with executed instructions, so a blocking C-model job doesn't trip guest timeouts; set empty to disable
-QEMU_ICOUNT="${QEMU_ICOUNT-shift=0,sleep=on}"
+TORQ_TIME_SCALE="${TORQ_TIME_SCALE:-1}"
+# Host backend waits do not advance guest time; idle CPUs jump to timers.
+# Set empty to disable icount.
+QEMU_ICOUNT="${QEMU_ICOUNT-shift=0,sleep=off}"
 KERNEL="$BASEDIR/linux"
 INITRD="$BASEDIR/initramfs.cpio.gz"
 ROOTFS="$BASEDIR/astra_sl_image/eMMCimg/rootfs.subimg"
@@ -91,6 +93,7 @@ exec "$QEMU" \
     -m "$QEMU_RAM_SIZE" \
     -object "memory-backend-shm,id=ram,size=$QEMU_RAM_SIZE,share=on" \
     -global "torq.backend=$TORQ_BACKEND" \
+    -global "torq.time-scale=$TORQ_TIME_SCALE" \
     -accel tcg \
     ${icount_args[@]+"${icount_args[@]}"} \
     -initrd "$INITRD" \

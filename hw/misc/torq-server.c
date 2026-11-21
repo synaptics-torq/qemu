@@ -22,6 +22,7 @@
 #include <sys/prctl.h>
 #endif
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "cm/torq_cm.h"
@@ -44,6 +45,31 @@ typedef struct DirtySpan {
     size_t size;
 } DirtySpan;
 
+static const uint32_t completion_registers[] = {
+    TORQ_NSS_STATUS, TORQ_NSS_START, TORQ_CPU_CONTROL,
+    TORQ_CDMA_STATUS, TORQ_CDMA_NSEC_STATUS, TORQ_CDMA_COMMAND,
+    0x1fe200,
+    0x1fc010, 0x1fc014, 0x1fc018, 0x1fc01c,
+    0x1fc020, 0x1fc024, 0x1fc028, 0x1fc02c,
+};
+
+enum {
+    COMPLETION_REGISTER_COUNT = sizeof(completion_registers) /
+                                sizeof(completion_registers[0]),
+};
+
+/* A launch polls the backend without sleeping for this long, then every TORQ_POLL_NS. */
+#define TORQ_SPIN_NS INT64_C(2000000)
+#define TORQ_POLL_NS 100000
+
+static int64_t monotonic_ns(void)
+{
+    struct timespec now;
+
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (int64_t)now.tv_sec * 1000000000 + now.tv_nsec;
+}
+
 typedef struct TorqServer {
     int socket_fd;
     void *model;
@@ -63,7 +89,11 @@ typedef struct TorqServer {
     bool progress;
     bool memory_error;
     bool results_pending;
+    bool completion_pending;
+    uint32_t visible_registers[COMPLETION_REGISTER_COUNT];
     uint32_t irq;
+    /* An FPGA job that does not complete in this time fails its launch (0: no limit). */
+    uint32_t job_timeout_ms;
 } TorqServer;
 
 static int cmodel_consume_start(TorqServer *server)
@@ -234,7 +264,8 @@ static int prepare(TorqServer *server, const TorqMessage *message,
     TorqMapping *mappings = *payload;
     size_t count = message->size / sizeof(*mappings);
 
-    if (message->size % sizeof(*mappings) ||
+    if (server->completion_pending ||
+        message->size % sizeof(*mappings) ||
         message->generation <= server->generation) {
         return -EINVAL;
     }
@@ -302,6 +333,7 @@ static int publish(TorqServer *server, uint32_t irq)
                server->xram + span->address, span->size);
     }
     server->dirty_count = 0;
+    server->results_pending = false;
     TorqMessage event = {
         .type = TORQ_MSG_IRQ,
         .value = irq,
@@ -312,34 +344,117 @@ static int publish(TorqServer *server, uint32_t irq)
     return torq_message_send(server->socket_fd, &event, NULL, -1);
 }
 
-static int advance(TorqServer *server)
+static int sample_irq(TorqServer *server, uint32_t *irq)
 {
-    uint32_t irq = 0;
-
+    *irq = 0;
     server->progress = false;
 #ifdef CONFIG_TORQ_AWS_FPGA
     if (server->fpga) {
-        if (torq_fpga_get_irq(server->fpga, &irq)) {
+        if (torq_fpga_get_irq(server->fpga, irq)) {
             return -1;
         }
         server->progress = torq_fpga_busy(server->fpga);
-        if (server->progress) {
-            return 0;
-        }
-        return publish(server, irq);
+        return 0;
     }
 #endif
     uint32_t control, enabled;
 
     if (torq_cm_read32(server->model, TORQ_NSS_CONTROL, &control) < 0 ||
         torq_cm_read32(server->model, TORQ_HOST_IEN, &enabled) < 0 ||
-        torq_cm__get_irq(server->model, 0, 1, &irq) < 0) {
+        torq_cm__get_irq(server->model, 0, 1, irq) < 0) {
         return -1;
     }
     if ((control & enabled & 0xff) && cmodel_consume_start(server) < 0) {
         return -1;
     }
-    return publish(server, irq);
+    return 0;
+}
+
+static int advance(TorqServer *server)
+{
+    uint32_t irq;
+
+    if (server->completion_pending) {
+        server->progress = false;
+        return 0;
+    }
+    if (sample_irq(server, &irq)) {
+        return -1;
+    }
+    return server->progress ? 0 : publish(server, irq);
+}
+
+static int launch(TorqServer *server, uint32_t address, uint32_t value,
+                   uint64_t *duration_ns)
+{
+    uint32_t irq;
+
+    if (server->completion_pending) {
+        return -EBUSY;
+    }
+    for (size_t index = 0; index < COMPLETION_REGISTER_COUNT; index++) {
+        uint32_t reg = completion_registers[index];
+        int status = backend_read(server, reg,
+                                   &server->visible_registers[index]);
+        if (status < 0) {
+            return status;
+        }
+        if (reg == address) {
+            server->visible_registers[index] = value;
+        }
+        if (address == TORQ_NSS_START && reg == TORQ_NSS_STATUS) {
+            server->visible_registers[index] &= ~value;
+        }
+        if (address == TORQ_CDMA_COMMAND && reg == TORQ_CDMA_STATUS) {
+            server->visible_registers[index] &= ~((1U << 16) | 1U);
+        }
+        if (address == TORQ_CDMA_COMMAND && reg == TORQ_CDMA_NSEC_STATUS) {
+            server->visible_registers[index] &= ~((1U << 17) | 3U);
+        }
+    }
+    int status = backend_write(server, address, value);
+    if (status < 0) {
+        return status;
+    }
+    server->results_pending = true;
+    int64_t launched_ns = monotonic_ns();
+    for (;;) {
+        if (sample_irq(server, &irq)) {
+            return -EIO;
+        }
+        if (!server->progress) {
+            break;
+        }
+        int64_t waited_ns = monotonic_ns() - launched_ns;
+#ifdef CONFIG_TORQ_AWS_FPGA
+        /* A C-model job runs while it is sampled, so only FPGA jobs can hang here. */
+        if (server->fpga && server->job_timeout_ms &&
+            waited_ns > (int64_t)server->job_timeout_ms * 1000000) {
+            return -ETIMEDOUT;
+        }
+#endif
+        /*
+         * The FPGA duration is measured when the completion is observed: poll without
+         * sleeping at first, so short jobs are measured to one poll, then back off.
+         */
+        if (waited_ns > TORQ_SPIN_NS) {
+            struct timespec delay = { .tv_nsec = TORQ_POLL_NS };
+
+            while (nanosleep(&delay, &delay)) {
+                if (errno != EINTR) {
+                    return -errno;
+                }
+            }
+        }
+    }
+    *duration_ns = 1000;
+#ifdef CONFIG_TORQ_AWS_FPGA
+    if (server->fpga) {
+        *duration_ns = torq_fpga_elapsed_ns(server->fpga);
+    }
+#endif
+    server->completion_pending = true;
+    return 0;
 }
 
 static int process(TorqServer *server, TorqMessage *message, void **payload,
@@ -367,6 +482,19 @@ static int process(TorqServer *server, TorqMessage *message, void **payload,
             reply.status = -EINVAL;
             break;
         }
+        if (server->completion_pending) {
+            size_t index;
+
+            for (index = 0; index < COMPLETION_REGISTER_COUNT; index++) {
+                if (completion_registers[index] == address) {
+                    reply.value = server->visible_registers[index];
+                    break;
+                }
+            }
+            if (index < COMPLETION_REGISTER_COUNT) {
+                break;
+            }
+        }
         reply.status = backend_read(server, address, &value);
         reply.value = value;
         if (torq_execution_read(address)) {
@@ -381,19 +509,37 @@ static int process(TorqServer *server, TorqMessage *message, void **payload,
             reply.status = -EINVAL;
             break;
         }
-        reply.status = backend_write(server, address, value);
-        if (!reply.status && torq_execution_write(address, value)) {
-            server->results_pending = true;
+        if (torq_execution_write(address, value)) {
+            reply.status = launch(server, address, value, &reply.value);
+            break;
         }
-        server->progress = server->prepared;
+        if (server->completion_pending) {
+            for (size_t index = 0; index < COMPLETION_REGISTER_COUNT; index++) {
+                if (completion_registers[index] == address) {
+                    reply.status = -EBUSY;
+                    break;
+                }
+            }
+            if (reply.status) {
+                break;
+            }
+        }
+        reply.status = backend_write(server, address, value);
+        server->progress = server->prepared && !server->completion_pending;
         /* Lower the IRQ before the reply, else the guest re-enters its handler on a stale level. */
         if (!reply.status && address == TORQ_NSS_STATUS && server->prepared &&
             advance(server)) {
             return -1;
         }
-        /* Run the C model to completion before replying so the guest's timeout starts after the job. */
-        if (!reply.status && server->model && torq_execution_write(address, value) &&
-            advance(server)) {
+        break;
+    case TORQ_MSG_COMMIT:
+        if (!server->completion_pending ||
+            message->generation != server->generation) {
+            reply.status = -EINVAL;
+            break;
+        }
+        server->completion_pending = false;
+        if (advance(server)) {
             return -1;
         }
         break;
@@ -402,11 +548,18 @@ static int process(TorqServer *server, TorqMessage *message, void **payload,
         server->prepared = false;
         server->progress = false;
         server->memory_error = false;
+        server->completion_pending = false;
+        server->results_pending = false;
+        server->dirty_count = 0;
         if (publish(server, 0)) {
             return -1;
         }
         break;
     case TORQ_MSG_INVALIDATE:
+        if (server->completion_pending) {
+            reply.status = -EBUSY;
+            break;
+        }
         server->prepared = false;
         server->progress = false;
         break;
@@ -433,18 +586,42 @@ int main(int argc, char **argv)
     int result = EXIT_FAILURE;
     char *end;
 
-    if ((argc != 3 && argc != 5) || strcmp(argv[1], "--fd") ||
-        (argc == 5 && strcmp(argv[3], "--backend"))) {
+    const char *socket_option = NULL;
+    const char *backend = "cmodel";
+    const char *job_timeout_option = NULL;
+
+    for (int index = 1; index + 1 < argc; index += 2) {
+        if (!strcmp(argv[index], "--fd")) {
+            socket_option = argv[index + 1];
+        } else if (!strcmp(argv[index], "--backend")) {
+            backend = argv[index + 1];
+        } else if (!strcmp(argv[index], "--job-timeout-ms")) {
+            job_timeout_option = argv[index + 1];
+        } else {
+            socket_option = NULL;
+            break;
+        }
+    }
+    if (!socket_option || argc % 2 != 1) {
         fprintf(stderr,
-            "Usage: %s --fd SOCKET_FD [--backend cmodel|aws-fpga]\n",
+            "Usage: %s --fd SOCKET_FD [--backend cmodel|aws-fpga] [--job-timeout-ms MS]\n",
                 argv[0]);
         return EXIT_FAILURE;
     }
     errno = 0;
-    long socket_fd = strtol(argv[2], &end, 10);
-    if (errno || end == argv[2] || *end || socket_fd < 0 ||
+    long socket_fd = strtol(socket_option, &end, 10);
+    if (errno || end == socket_option || *end || socket_fd < 0 ||
         socket_fd > INT32_MAX) {
         return EXIT_FAILURE;
+    }
+    if (job_timeout_option) {
+        errno = 0;
+        unsigned long job_timeout_ms = strtoul(job_timeout_option, &end, 10);
+        if (errno || end == job_timeout_option || *end || job_timeout_ms > UINT32_MAX) {
+            fprintf(stderr, "TORQ: invalid --job-timeout-ms %s\n", job_timeout_option);
+            return EXIT_FAILURE;
+        }
+        server.job_timeout_ms = job_timeout_ms;
     }
     server.socket_fd = socket_fd;
     signal(SIGPIPE, SIG_IGN);
@@ -460,7 +637,7 @@ int main(int argc, char **argv)
         perror("TORQ XRAM allocation");
         return EXIT_FAILURE;
     }
-    if (argc == 3 || !strcmp(argv[4], "cmodel")) {
+    if (!strcmp(backend, "cmodel")) {
         server.model = torq_cm_open(server.xram, 0, TORQ_IOVA_LIMIT);
         if (!server.model ||
             torq_cm__set_ext_mem_if(server.model, &server,
@@ -472,7 +649,7 @@ int main(int argc, char **argv)
 #endif
     } else {
 #ifdef CONFIG_TORQ_AWS_FPGA
-        if (!strcmp(argv[4], "aws-fpga")) {
+        if (!strcmp(backend, "aws-fpga")) {
             server.fpga = torq_fpga_open();
         }
         if (!server.fpga) {

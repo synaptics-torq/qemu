@@ -32,6 +32,49 @@ using the Astra SL SDK image.
 
     An optional first argument is appended to the kernel command line.
 
+### Device timing
+
+The default is `-icount shift=0,sleep=off`: guest instructions advance virtual
+time, and idle CPUs jump to the next virtual timer without sleeping on the host.
+TORQ execution is collected synchronously without advancing guest time, then
+the guest runs concurrently with a virtual job until its completion deadline.
+Completion status, shared-RAM output publication and IRQ delivery are deferred
+to that deadline.
+
+`TORQ_TIME_SCALE` sets the positive, finite multiplier for backend duration
+(default `1`). FPGA duration is measured with a host monotonic clock from launch
+to observed completion, excluding input uploads and output downloads. The server
+polls the completion without sleeping for the first 2 ms, then every 100 us, so
+a short job is measured to within one poll of the FPGA registers and a longer one
+to within about 100 us plus host scheduling latency; it is not a hardware cycle
+measurement. C-model jobs currently use a fixed 1000 ns duration, also
+multiplied by the scale.
+
+The guest stays blocked in the register write that launches a job until the
+backend completes it. An FPGA job that does not complete within the device's
+`job-timeout-ms` (default 30000, `0` for no limit) fails, and QEMU restarts the
+server; a C-model job is bounded only by `timeout-ms`, the server reply timeout.
+
+Times measured inside the guest are virtual: with `shift=0`, one guest
+instruction is 1 ns, and TORQ jobs take their scaled duration. Wall-clock times
+measured in the guest (for example with `time`) are therefore not host times,
+and C-model jobs look nearly instant.
+
+```bash
+TORQ_BACKEND=aws-fpga TORQ_TIME_SCALE=0.1 ./run.sh
+```
+
+This sets the virtual deadline to launch time plus the scaled duration, rounded
+up to whole nanoseconds; it does not add time to the clock on completion.
+The existing host-time server timeout remains separate from guest timeouts.
+Job mappings and input/output buffers must remain stable until completion;
+overlapping jobs and writes to completion registers during a virtual job are
+unsupported. Reset discards a pending completion and its output.
+
+`QEMU_ICOUNT` overrides the icount options; `QEMU_ICOUNT= ./run.sh` disables
+instruction counting, but then backend host waits are no longer isolated from
+guest time.
+
 ## Networking / SSH
 
 The guest gets a virtio network interface (`eth0`) backed by QEMU user-mode networking
