@@ -88,10 +88,18 @@ fi
 
 echo "Starting Astra SL with the extracted kernel and initramfs (ssh: localhost:$SSH_PORT, adb: localhost:$ADB_PORT)..."
 
+if [[ "$(uname -s)" == "Linux" ]]; then
+    # use memfd on linux to enable easy root-less usage
+    RAM_BACKEND=memory-backend-memfd
+else
+    # other OSes do not have memfd support, so fall back to shared memory
+    RAM_BACKEND=memory-backend-shm
+fi
+
 exec "$QEMU" \
     -machine astra_sl,memory-backend=ram \
     -m "$QEMU_RAM_SIZE" \
-    -object "memory-backend-shm,id=ram,size=$QEMU_RAM_SIZE,share=on" \
+    -object "$RAM_BACKEND,id=ram,size=$QEMU_RAM_SIZE,share=on" \
     -global "torq.backend=$TORQ_BACKEND" \
     -global "torq.time-scale=$TORQ_TIME_SCALE" \
     -accel tcg \
