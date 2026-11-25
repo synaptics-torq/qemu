@@ -34,7 +34,7 @@ fi
 kernel_cmdline="console=ttyS0,115200 root=/dev/vda rootfstype=ext4 net.ifnames=0 ${1:-}"
 
 # disable unnecessary services and blacklist certain modules that are not emulated
-kernel_cmdline="$kernel_cmdline systemd.mask=tee-supplicant.service systemd.mask=brcm_bt_start.service systemd.mask=swupdate.service systemd.mask=ncm-gadget-setup.service systemd.mask=-brcm_bt_start.service module_blacklist=syna_drm,synadhd103,synadhd361,synadhd461,synadhd591,bcmdhd"
+kernel_cmdline="$kernel_cmdline systemd.mask=tee-supplicant.service systemd.mask=brcm_bt_start.service systemd.mask=swupdate.service systemd.mask=systemd-timesyncd.service systemd.mask=ncm-gadget-setup.service systemd.mask=-brcm_bt_start.service module_blacklist=syna_drm,synadhd103,synadhd361,synadhd461,synadhd591,bcmdhd"
 
 # to enable SMMU tracing add this to the QEMU command line
 #
@@ -100,6 +100,7 @@ exec "$QEMU" \
     -machine astra_sl,memory-backend=ram \
     -m "$QEMU_RAM_SIZE" \
     -object "$RAM_BACKEND,id=ram,size=$QEMU_RAM_SIZE,share=on" \
+    -rtc clock=vm \
     -global "torq.backend=$TORQ_BACKEND" \
     -global "torq.time-scale=$TORQ_TIME_SCALE" \
     -accel tcg \
